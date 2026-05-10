@@ -29,6 +29,8 @@ Conversation history uses an **in-memory** `SessionStore` (dict keyed by `sessio
 
 An optional **`QueryCache`** (60s TTL) deduplicates identical `(session_id, query)` classifier calls within a session to shave redundant LLM cost during retries or double-submits.
 
+**Portfolio health** (`src/agents/portfolio_health.py`) pulls spot FX and equity quotes via **`yfinance`** (see `requirements.txt`). CI/tests expect outbound HTTP so benchmarks and positions can be marked — if downloads fail, the agent falls back to average-cost placeholders and a documented default benchmark return without crashing.
+
 **Streaming is required.** SSE only. Use `sse-starlette`, FastAPI's `StreamingResponse`, or roll your own — your call.
 
 ```bash
