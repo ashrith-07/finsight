@@ -19,6 +19,16 @@ An AI agent ecosystem that helps a novice investor **build, monitor, grow, and p
 
 **Persistence is your choice.** Postgres, SQLite, or in-memory — pick one and defend it in your README. `DATABASE_URL` in `.env.example` is optional.
 
+### Session memory (`src/session.py`)
+
+Conversation history uses an **in-memory** `SessionStore` (dict keyed by `session_id`, each value a capped list of `ConversationTurn`). Rationale:
+
+- **Zero extra dependencies** — no Redis driver, no DB URL, no migrations; the demo runs after `pip install` only.
+- **Sufficient for demo scale** — bounded retention (`MAX_TURNS = 10` per session) keeps memory predictable for classroom evaluation and local testing.
+- **Trivially swappable later** — the store exposes a small async API (`get_turns`, `add_turn`, `get_prior_user_turns`, `get_last_entities`, `clear`). Replacing the dict with Redis or Postgres is a drop-in behind the same methods.
+
+An optional **`QueryCache`** (60s TTL) deduplicates identical `(session_id, query)` classifier calls within a session to shave redundant LLM cost during retries or double-submits.
+
 **Streaming is required.** SSE only. Use `sse-starlette`, FastAPI's `StreamingResponse`, or roll your own — your call.
 
 ```bash
