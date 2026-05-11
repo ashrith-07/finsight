@@ -78,7 +78,7 @@ Entity object fields (omit keys not mentioned in the user message; use JSON null
 class ClassifierInput:
     query: str
     prior_user_turns: list[str] = field(default_factory=list)
-    session_context: dict = field(default_factory=dict)
+    last_entities: dict = field(default_factory=dict)
 
 
 def _taxonomy_block() -> str:
@@ -89,12 +89,13 @@ def _taxonomy_block() -> str:
 
 
 def _build_system_message(inp: ClassifierInput) -> str:
-    session_blob = ""
-    if inp.session_context:
-        session_blob = (
-            "\nLast known structured entities from this session "
-            "(JSON snapshot; may be incomplete or stale):\n"
-            f"{json.dumps(inp.session_context, ensure_ascii=False)}\n"
+    context_blob = ""
+    if inp.last_entities:
+        context_blob = (
+            "\nCONVERSATION CONTEXT:\n"
+            f"The user's last known entities were: {json.dumps(inp.last_entities, ensure_ascii=False)}\n"
+            "If the current query uses vague references or pronouns, resolve them "
+            "using these entities first before extracting new ones.\n"
         )
 
     return f"""You are an expert financial intent classifier for a wealth-management assistant.
@@ -102,7 +103,7 @@ def _build_system_message(inp: ClassifierInput) -> str:
 {_taxonomy_block()}
 
 {_ENTITY_VOCABULARY_TEXT}
-{session_blob}
+{context_blob}
 Respond with ONLY valid JSON — no prose, no markdown fences, no code blocks. Schema:
 {{
   "intent": "string describing the user's intent",
@@ -358,7 +359,7 @@ class IntentClassifier:
         self,
         query: str,
         prior_user_turns: list[str] | None = None,
-        session_context: dict | None = None,
+        last_entities: dict | None = None,
     ) -> ClassifierResult:
         try:
             # Keep deterministic tests unchanged: queued mocks should always drive output.
@@ -376,7 +377,7 @@ class IntentClassifier:
             inp = ClassifierInput(
                 query=query,
                 prior_user_turns=list(prior_user_turns or ()),
-                session_context=dict(session_context or {}),
+                last_entities=dict(last_entities or {}),
             )
             messages = self._build_messages(inp)
 
@@ -418,5 +419,6 @@ async def classify(
     query: str,
     llm: LLMClient,
     prior_user_turns: list[str] | None = None,
+    last_entities: dict | None = None,
 ) -> ClassifierResult:
-    return await IntentClassifier(llm).classify(query, prior_user_turns)
+    return await IntentClassifier(llm).classify(query, prior_user_turns, last_entities)

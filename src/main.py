@@ -139,10 +139,14 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                     prior_turns = await session_store.get_prior_user_turns(
                         request.session_id
                     )
+                    last_entities = await session_store.get_last_entities(
+                        request.session_id
+                    )
                     classifier_result = await classify(
                         request.query,
                         llm=llm,
                         prior_user_turns=prior_turns,
+                        last_entities=last_entities,
                     )
                     query_cache.set(
                         request.session_id, request.query, classifier_result

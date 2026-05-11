@@ -46,7 +46,7 @@ class SessionStore:
             turns = self._store.get(session_id, [])
             if not turns:
                 return {}
-            return dict(turns[-1].entities)
+            return turns[-1].entities
 
     async def clear(self, session_id: str) -> None:
         async with self._lock:
