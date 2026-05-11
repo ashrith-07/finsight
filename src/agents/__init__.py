@@ -1,1 +1,1 @@
-"""Specialist agents invoked after classification and routing."""
+"""Post-router agents."""

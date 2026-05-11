@@ -1,6 +1,4 @@
-"""
-Portfolio Health agent — full implementation using yfinance + one LLM call for observations.
-"""
+"""Portfolio analytics via yfinance plus one LLM pass for observations."""
 
 from __future__ import annotations
 
@@ -79,7 +77,6 @@ def _benchmark_ticker(name: str) -> str:
 
 
 def _rule_based_build_observations(age: int, risk: str) -> list[Observation]:
-    """3–4 BUILD-oriented bullets — no LLM."""
     risk = risk.lower()
     obs: list[Observation] = []
     if age < 35:
@@ -174,9 +171,7 @@ def _rule_based_build_observations(age: int, risk: str) -> list[Observation]:
 
 
 def build_guidance_response(user: dict) -> PortfolioHealthResult:
-    """
-    Zero-position portfolio: warm BUILD guidance, rule-based observations, no LLM.
-    """
+    """Empty book: rule-based copy only, no LLM."""
     p = _parse_profile(user)
     benchmark_name = _benchmark_preference(p.preferences)
     observations = _rule_based_build_observations(p.age, p.risk_profile)
@@ -224,7 +219,6 @@ def _parse_date(iso: str) -> datetime | None:
 
 
 def _close_usd_for_currency(amount_local: float, currency: str, fx: dict[str, float]) -> float:
-    """Convert a per-share amount from ``currency`` to USD using snapshot FX."""
     c = currency.upper()
     if c == "USD":
         return float(amount_local)
@@ -254,8 +248,6 @@ def _thread_last_close(symbol: str) -> float | None:
 
 
 async def _snapshot_fx_to_usd() -> dict[str, float]:
-    """EURUSD, GBPUSD, USDJPY quotes for converting position currencies to USD."""
-
     async def one(sym: str) -> tuple[str, float | None]:
         val = await asyncio.to_thread(_thread_last_close, sym)
         return sym, val
@@ -270,10 +262,7 @@ async def _snapshot_fx_to_usd() -> dict[str, float]:
 
 
 async def _fetch_prices(positions: list[dict]) -> tuple[dict[str, float], list[str]]:
-    """
-    Returns ``prices[ticker]`` = last close in **local listing currency** (yahoo convention).
-    Also returns warning texts when fallback to avg_cost is used.
-    """
+    """Last close per ticker in Yahoo's listing currency; warns when falling back to ``avg_cost``."""
     tickers = list({str(p.get("ticker") or "").strip() for p in positions if p.get("ticker")})
     warnings: list[str] = []
     prices_local: dict[str, float] = {}
@@ -285,7 +274,7 @@ async def _fetch_prices(positions: list[dict]) -> tuple[dict[str, float], list[s
     fetched = await asyncio.gather(*[fetch_sym(t) for t in tickers])
     for sym, px in fetched:
         if px is None:
-            # Fallback to avg_cost of matching position (same currency as stored cost)
+            # avg_cost matches position currency when quote is missing
             pcost = next((p for p in positions if str(p.get("ticker")) == sym), None)
             fb = float(pcost["avg_cost"]) if pcost and pcost.get("avg_cost") is not None else 0.0
             prices_local[sym] = fb
@@ -324,7 +313,7 @@ def _compute_performance(
     prices_local: dict[str, float],
     fx_to_usd: dict[str, float],
 ) -> tuple[Performance, datetime | None]:
-    """Compute aggregates in USD; approximate FX at purchase using spot FX."""
+    """Totals in USD; cost basis converted with spot FX (no historical FX)."""
     total_cost = 0.0
     total_current = 0.0
     oldest: datetime | None = None
@@ -407,10 +396,7 @@ async def _compute_benchmark(
     benchmark_name: str,
     oldest_purchase_date: datetime | None,
 ) -> tuple[BenchmarkComparison, bool]:
-    """
-    Same-window benchmark total return vs portfolio ``total_return_pct`` (approximation).
-    Second return value is True when the benchmark series could not be fetched.
-    """
+    """Bench vs portfolio over ~same window; second flag = series unavailable (placeholder return used)."""
     portfolio_return = performance.total_return_pct
     symbol = _benchmark_ticker(benchmark_name)
     end = datetime.now(timezone.utc)
@@ -533,8 +519,6 @@ async def _generate_observations(
 
 
 class PortfolioHealthAgent:
-    """Computes portfolio analytics and narrates them with a single LLM assist."""
-
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
 
@@ -627,5 +611,4 @@ class PortfolioHealthAgent:
 
 
 async def run(user: dict, llm: LLMClient) -> PortfolioHealthResult:
-    """Module-level entrypoint."""
     return await PortfolioHealthAgent(llm).run(user)

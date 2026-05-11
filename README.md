@@ -103,7 +103,7 @@ Using current pricing **$2 / 1M input tokens** and **$8 / 1M output tokens**:
 
 ```bash
 git clone https://github.com/2CentsCapital/valura-ai-ai-engineer-assignment-ashrith-07
-cd <repo>
+cd valura-ai-ai-engineer-assignment-ashrith-07
 python -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt

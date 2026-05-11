@@ -1,10 +1,4 @@
-"""
-Valura AI FastAPI HTTP layer: safety → classifier → router → SSE-only responses.
-
-Default pipeline timeout is **30 seconds** (override with ``PIPELINE_TIMEOUT`` env).
-Rationale: enough headroom for yfinance + LLM work without holding connections open
-indefinitely — see README for tuning notes.
-"""
+"""FastAPI app: safety → classify → route → SSE. Default timeout 30s via ``PIPELINE_TIMEOUT``."""
 
 from __future__ import annotations
 
@@ -81,12 +75,6 @@ def _sse(event: str, data: str) -> dict[str, str]:
 
 
 def _build_summary(response: AgentResponse) -> str:
-    """
-    Plain-language text for streaming deltas.
-
-    Portfolio health: top observations + disclaimer.
-    Stubs: ``AgentResponse.message``.
-    """
     if response.agent == "portfolio_health" and response.result is not None:
         result = response.result
         if isinstance(result, PortfolioHealthResult):
@@ -109,16 +97,7 @@ def _build_summary(response: AgentResponse) -> str:
 
 @app.post("/chat")
 async def chat(request: ChatRequest) -> EventSourceResponse:
-    """
-    Full pipeline: safety → classifier → router → SSE stream.
-
-    Streams SSE events:
-
-    - ``delta`` — streamed summary text chunks
-    - ``result`` — final structured ``AgentResponse`` JSON
-    - ``error`` — client-safe JSON error (no stack traces)
-    - ``done`` — stream terminator (always last)
-    """
+    """SSE only: ``delta`` (summary chunks), ``result`` (JSON), optional ``error``, trailing ``done``."""
     llm = get_llm_client()
     router = AgentRouter(llm)
 

@@ -1,4 +1,4 @@
-"""Placeholder agent for taxonomy slots not yet implemented."""
+"""Stub responses for unimplemented agents."""
 
 from __future__ import annotations
 
@@ -10,11 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class StubAgent:
-    """
-    Returns a structured 'not implemented' response for all agents except portfolio_health.
-
-    Must never raise. Must never return an HTTP error (callers map this to 200 + payload).
-    """
+    """Always returns 200-safe ``AgentResponse`` with ``implemented=False``; swallow errors."""
 
     NOT_IMPLEMENTED_MESSAGES = {
         "market_research": (

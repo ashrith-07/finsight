@@ -1,1 +1,1 @@
-"""Valura AI — FastAPI microservice package root."""
+"""Valura AI service package."""

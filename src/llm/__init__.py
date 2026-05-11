@@ -1,4 +1,4 @@
-"""LLM provider abstractions for Valura AI."""
+"""LLM factory and exports."""
 
 from __future__ import annotations
 
@@ -19,17 +19,9 @@ def _resolved_model(explicit: str | None) -> str:
 
 
 def get_llm_client(model: str | None = None) -> LLMClient:
-    """
-    Returns OpenAILLMClient if OPENAI_API_KEY is set in environment.
-
-    Model id: ``model`` arg if provided, else ``LLM_MODEL``, else ``OPENAI_MODEL``,
-    defaulting to ``gpt-4o-mini``.
-
-    Falls back to MockLLMClient with an empty response queue otherwise.
-    Never raises — always returns a usable client.
-    """
+    """OpenAI client when ``OPENAI_API_KEY`` is set; else ``MockLLMClient``. Model: arg → ``LLM_MODEL`` → ``OPENAI_MODEL`` → ``gpt-4o-mini``. Never raises."""
     if os.environ.get("OPENAI_API_KEY", "").strip():
-        # Lazy import: keeps ``openai`` unloaded when only the mock path is used (e.g. CI).
+        # Avoid importing ``openai`` on the mock-only path (tests / CI).
         from src.llm.openai_llm import OpenAILLMClient
 
         return OpenAILLMClient(model=_resolved_model(model))

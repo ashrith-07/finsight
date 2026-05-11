@@ -1,8 +1,4 @@
-"""
-Intent classifier: one LLM call per classification, returns ``ClassifierResult``.
-
-Callers inject ``LLMClient``; this module never constructs an LLM provider.
-"""
+"""Intent classifier: one ``LLMClient.complete`` per turn → ``ClassifierResult``. Callers inject the client."""
 
 from __future__ import annotations
 
@@ -18,10 +14,7 @@ from src.models import ClassifierResult, Entity
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Taxonomy (must match ``fixtures/test_queries/intent_classification.json``)
-# ---------------------------------------------------------------------------
-
+# Mirrors fixtures/test_queries/intent_classification.json → agent_taxonomy.
 AGENT_TAXONOMY: dict[str, str] = {
     "portfolio_health": (
         "structured assessment of the user's portfolio "
@@ -77,8 +70,6 @@ Entity object fields (omit keys not mentioned in the user message; use JSON null
 
 @dataclass
 class ClassifierInput:
-    """Bundled inputs for prompt construction (internal, not an API model)."""
-
     query: str
     prior_user_turns: list[str] = field(default_factory=list)
     session_context: dict = field(default_factory=dict)
@@ -124,7 +115,6 @@ Critical — follow-up resolution:
 
 
 def _strip_json_fence(text: str) -> str:
-    """Remove optional ``` / ```json wrappers the model might still emit."""
     s = text.strip()
     if not s.startswith("```"):
         return s
@@ -164,8 +154,6 @@ FALLBACK_RESULT = ClassifierResult(
 
 
 class IntentClassifier:
-    """Single-shot LLM router producing a ``ClassifierResult``."""
-
     AGENT_TAXONOMY = AGENT_TAXONOMY
     FALLBACK_RESULT = FALLBACK_RESULT
 
@@ -188,11 +176,6 @@ class IntentClassifier:
         prior_user_turns: list[str] | None = None,
         session_context: dict | None = None,
     ) -> ClassifierResult:
-        """
-        Build messages, call the LLM once, parse JSON, return ``ClassifierResult``.
-
-        On any failure: log and return ``FALLBACK_RESULT``.
-        """
         try:
             inp = ClassifierInput(
                 query=query,
@@ -240,5 +223,4 @@ async def classify(
     llm: LLMClient,
     prior_user_turns: list[str] | None = None,
 ) -> ClassifierResult:
-    """Convenience wrapper that builds a short-lived ``IntentClassifier``."""
     return await IntentClassifier(llm).classify(query, prior_user_turns)

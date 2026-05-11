@@ -1,8 +1,4 @@
-"""OpenAI-backed LLM implementation.
-
-This module is the **only** place in the codebase that imports or calls the
-``openai`` package.
-"""
+"""OpenAI implementation — sole module that imports the ``openai`` SDK."""
 
 from __future__ import annotations
 
@@ -26,8 +22,6 @@ def _require_api_key() -> str:
 
 
 class OpenAILLMClient(LLMClient):
-    """Async OpenAI chat client with structured completions and token streaming."""
-
     def __init__(self, model: str = "gpt-4o-mini") -> None:
         from openai import AsyncOpenAI, OpenAIError
 
@@ -44,7 +38,6 @@ class OpenAILLMClient(LLMClient):
     ) -> BaseModel | str:
         try:
             if response_model is not None:
-                # Uses OpenAI structured outputs (JSON schema derived from the Pydantic model).
                 completion = await self._client.chat.completions.parse(
                     model=self._model,
                     messages=messages,

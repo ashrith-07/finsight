@@ -1,16 +1,6 @@
 """
-Synchronous, pattern-only safety guard (no LLM, no network).
-
-Design (two layers, inspired by the assignment brief):
-  * Layer 1 — per-category ``block`` regex: first-person / operational harm.
-  * Layer 2 — per-category ``allow`` regex: definitional or regulatory-education
-    cues (“what is…”, “explain…”, “penalties…”). If Layer 1 hits but Layer 2
-    also hits for that category, we **do not** block (educational pass-through).
-
-Rules are evaluated in fixed order; the first block-without-allow wins.
-All ``re.compile`` calls run once inside ``SafetyGuard._load_rules`` (invoked
-from ``__init__``), so ``check()`` is a small linear scan over pre-built
-automata — typically sub-millisecond on realistic query lengths.
+Regex-only safety guard (no LLM). Block regex per category + optional allow-regex for
+educational phrasing; first block without a matching allow wins. Patterns compile once in ``SafetyGuard.__init__``.
 """
 
 from __future__ import annotations
@@ -20,10 +10,7 @@ from typing import Pattern
 
 from src.models import SafetyVerdict
 
-# ---------------------------------------------------------------------------
-# Verbatim user-facing refusal copy (one stable string per policy bucket)
-# ---------------------------------------------------------------------------
-
+# Stable refusal copy per policy bucket (shown verbatim when blocked).
 _MESSAGES: dict[str, str] = {
     "insider_trading": (
         "I'm unable to assist with trades based on material non-public information. "
@@ -64,26 +51,13 @@ _MESSAGES: dict[str, str] = {
 
 
 class SafetyGuard:
-    """
-    Layer-1 block regexes paired with optional Layer-2 allow (educational) regexes.
-
-    Allow patterns deliberately avoid bare “what's …” openings so definitional
-    questions like “what's the historical average …” still pass while
-    “what's a foolproof way …” remains blocked by the guaranteed_returns rule.
-    """
+    """Allow-regexes deliberately omit bare ``what's …`` so e.g. \"what's a foolproof way\" stays blocked under guaranteed_returns."""
 
     def __init__(self) -> None:
         self._rules: list[tuple[str, Pattern[str], Pattern[str] | None]] = []
         self._load_rules()
 
     def _load_rules(self) -> None:
-        # --- Shared educational / definitional signals (Layer 2) -----------------
-        # Tuned to gold fixtures: includes “describe”, “why are”, “how should”,
-        # “what factors”, “what's the difference”, “are … legal”, etc.
-        # Excludes bare “what's a …” so “what's a foolproof way” cannot escape.
-        # Insider allow: definitional / comparative / penalty / supervisory context.
-        # “how do regulators” covers “how do regulators detect…” without matching
-        # “how do i move cash…” (different token after “how do”).
         _EDU_INSIDER = re.compile(
             r"(?ix)\b("
             r"what\s+is(\s+the)?|what\s+are(\s+the)?|explain(\s+the)?|"
@@ -93,8 +67,6 @@ class SafetyGuard:
             r")\b"
         )
 
-        # Manipulation allow: pedagogy on schemes, legality questions, SEC/FCA narrative.
-        # “are … legal” needs a broad window between tokens for “are pump-and-dump … legal”.
         _EDU_MANIP = re.compile(
             r"(?ix)\b("
             r"what\s+is(\s+a)?|explain|how\s+does|how\s+do\s+regulators|"
@@ -102,8 +74,6 @@ class SafetyGuard:
             r")\b"
         )
 
-        # AML allow: course-style “describe three stages” and vocabulary lessons
-        # (“what is structuring”) — distinct from imperative “help me structure…”.
         _EDU_AML = re.compile(
             r"(?ix)\b("
             r"what\s+are(\s+the)?|what\s+is|describe(\s+the)?|"
@@ -112,8 +82,6 @@ class SafetyGuard:
             r")\b"
         )
 
-        # Guaranteed-return allow: critique / history / legitimacy questions.
-        # Deliberately **no** bare “what's …” — that would unblock “what's a foolproof way…”.
         _EDU_GUARANTEED = re.compile(
             r"(?ix)\b("
             r"what\s+is|why\s+are|explain|is\s+it\s+ever\s+legitimate|"
@@ -121,26 +89,20 @@ class SafetyGuard:
             r")\b"
         )
 
-        # Reckless allow: risk framing and allocation guidance, not imperative “do it”.
         _EDU_RECKLESS = re.compile(
             r"(?ix)\b("
             r"what\s+factors|what\s+are\s+the\s+risks|how\s+should"
             r")\b"
         )
 
-        # Sanctions allow: compliance literacy, not evasion recipes.
         _EDU_SANCTIONS = re.compile(
             r"(?ix)\b("
             r"what\s+are\s+ofac|how\s+do\s+brokerages|compliance\s+obligations"
             r")\b"
         )
 
-        # --- Layer 1: insider_trading -----------------------------------------
-        # First-person + MNPI verbs/nouns + trading intent; kept separate from
-        # academic “what is insider trading” phrasing (handled by _EDU_INSIDER).
         _insider_block = re.compile(
             r"(?ix)(?:"
-            # Workplace / relationship + non-public deal knowledge + trade timing
             r"\b(?:i\s+)?work\s+at\b.*\b(?:know|knew)\b.*\bunannounced\b.*\b(?:buy|shares)\b"
             r"|"
             r"\bfriend\s+at\b.*\b(?:tip|tipped)\b.*\b(?:earnings)\b.*\b(?:load\s+up|before)\b"
@@ -151,10 +113,6 @@ class SafetyGuard:
             r")"
         )
 
-        # --- Layer 1: market_manipulation ------------------------------------
-        # Requires operational verbs (“pump up the price … before selling”,
-        # “design … scheme … move”, “help me wash trade”) so “what is wash trading”
-        # (Layer 2) never hits the block arm.
         _manip_block = re.compile(
             r"(?ix)(?:"
             r"\bpump\b.*\bprice\b.*\b(?:before\s+selling|dump)\b"
@@ -165,9 +123,6 @@ class SafetyGuard:
             r")"
         )
 
-        # --- Layer 1: money_laundering ---------------------------------------
-        # Uses action phrases (“layer my trades”) so “layering” in AML pedagogy
-        # does not false-positive.
         _ml_block = re.compile(
             r"(?ix)(?:"
             r"\bmove\b.*\bcash\b.*\bstock\b.*\bwithout\s+reporting\b"
@@ -180,11 +135,6 @@ class SafetyGuard:
             r")"
         )
 
-        # --- Layer 1: guaranteed_returns -------------------------------------
-        # Anchors on imperative “guarantee/promise me” or absurd certainty language.
-        # “foolproof … way|make|month” catches colloquial get-rich-quick phrasing
-        # without matching benign “foolproof” mentions inside academic critique
-        # (those flows hit _EDU_GUARANTEED instead when relevant).
         _guar_block = re.compile(
             r"(?ix)(?:"
             r"\bguarantee\s+me\b"
@@ -197,9 +147,6 @@ class SafetyGuard:
             r")"
         )
 
-        # --- Layer 1: reckless_advice ----------------------------------------
-        # Targets all-in / leverage / emergency-fund / housing collateral asks
-        # phrased as directives (“do it”, “tell me to”, “should i put entire…”).
         _reck_block = re.compile(
             r"(?ix)(?:"
             r"\b70\b.*\bretirement\b.*\bcrypto\b.*\bdo\s+it\b"
@@ -212,9 +159,6 @@ class SafetyGuard:
             r")"
         )
 
-        # --- Layer 1: sanctions_evasion --------------------------------------
-        # “route … shell … OFAC” and evasive investing in sanctioned names; both
-        # are distinct from “what are OFAC sanctions…” compliance questions.
         _san_block = re.compile(
             r"(?ix)(?:"
             r"\bhelp\s+me\s+route\s+trades\b.*\b(?:shell\s+company|bypass)\b.*\bofac\b"
@@ -223,15 +167,10 @@ class SafetyGuard:
             r")"
         )
 
-        # --- Layer 1: fraud ---------------------------------------------------
-        # Document forgery: verb of fabrication + “fake” + instrument type.
-        # No allow pattern — educational fraud questions in fixtures are generic
-        # (“FCA's role in preventing fraud”) and do not mention fake contract notes.
         _fraud_block = re.compile(
             r"(?ix)\b(?:draft|create|fabricate)\b.*\bfake\b.*\bcontract\s+note\b"
         )
 
-        # Order: specific operational asks before any broader future rules.
         self._rules = [
             ("insider_trading", _insider_block, _EDU_INSIDER),
             ("market_manipulation", _manip_block, _EDU_MANIP),
@@ -243,7 +182,6 @@ class SafetyGuard:
         ]
 
     def check(self, query: str) -> SafetyVerdict:
-        """Run all rules. Return first block hit. O(n_rules) worst case."""
         text = query.strip()
         lowered = text.lower()
 
@@ -265,5 +203,4 @@ _guard = SafetyGuard()
 
 
 def check(query: str) -> SafetyVerdict:
-    """Module-level convenience; uses the process-wide singleton guard."""
     return _guard.check(query)

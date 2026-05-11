@@ -1,4 +1,4 @@
-"""Test and CI-friendly mock LLM."""
+"""Mock LLM for tests and no-key runs."""
 
 from __future__ import annotations
 
@@ -14,15 +14,10 @@ from src.models import ClassifierResult
 
 
 class MockExhaustedError(RuntimeError):
-    """Raised when ``complete()`` is called after the mock response queue is empty."""
+    """Queue empty on ``complete``."""
 
 
 class MockLLMClient(LLMClient):
-    """
-    Deterministic LLM double: ``complete`` drains a queue; ``stream`` replays
-    fixed text chunks. Safe for CI (no network, no API key).
-    """
-
     def __init__(
         self,
         responses: list[BaseModel | str | list[BaseModel]] | None = None,
@@ -34,7 +29,6 @@ class MockLLMClient(LLMClient):
 
     @classmethod
     def for_classifier(cls, result: ClassifierResult) -> MockLLMClient:
-        """Build a client with one structured ``ClassifierResult`` queued for ``complete``."""
         return cls(responses=[result])
 
     async def complete(

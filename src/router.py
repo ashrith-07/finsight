@@ -1,4 +1,4 @@
-"""Routes classifier output to the portfolio health agent or stub implementations."""
+"""Dispatch ``ClassifierResult`` to portfolio health or taxonomy stubs."""
 
 from __future__ import annotations
 
@@ -21,8 +21,6 @@ def _portfolio_summary_message(result: PortfolioHealthResult) -> str:
 
 
 class AgentRouter:
-    """Dispatches to concrete agents; portfolio health is fully implemented."""
-
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
         self._portfolio_health = PortfolioHealthAgent(llm)
@@ -33,10 +31,6 @@ class AgentRouter:
         classifier_result: ClassifierResult,
         user: dict,
     ) -> AgentResponse:
-        """
-        Dispatch on ``classifier_result.agent``.
-        Never raises — always returns ``AgentResponse``.
-        """
         agent = classifier_result.agent
         intent = classifier_result.intent
         entities = classifier_result.entities
@@ -83,10 +77,9 @@ class AgentRouter:
         classifier_result: ClassifierResult,
         user: dict,
     ) -> AgentResponse:
-        """Same as ``route()`` but normalizes edge cases on the response envelope."""
         response = await self.route(classifier_result, user)
         if response.result is None and response.agent == "portfolio_health":
-            # Surface a readable summary when structured result is missing (error path).
+            # ``route`` can leave ``message`` blank on the error path
             if not (response.message or "").strip():
                 response = response.model_copy(
                     update={
