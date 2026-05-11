@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from src.llm.base import LLMClient, LLMError
-from src.llm.mock_llm import MockExhaustedError, MockLLMClient
+from src.llm.mock_llm import MockExhaustedError, MockLLMClient, SmartMockLLMClient
 
 
 def _resolved_model(explicit: str | None) -> str:
@@ -19,13 +19,13 @@ def _resolved_model(explicit: str | None) -> str:
 
 
 def get_llm_client(model: str | None = None) -> LLMClient:
-    """OpenAI client when ``OPENAI_API_KEY`` is set; else ``MockLLMClient``. Model: arg → ``LLM_MODEL`` → ``OPENAI_MODEL`` → ``gpt-4o-mini``. Never raises."""
+    """OpenAI when ``OPENAI_API_KEY`` is set; else keyword SmartMock (demos / no key). Model resolution unchanged."""
     if os.environ.get("OPENAI_API_KEY", "").strip():
         # Avoid importing ``openai`` on the mock-only path (tests / CI).
         from src.llm.openai_llm import OpenAILLMClient
 
         return OpenAILLMClient(model=_resolved_model(model))
-    return MockLLMClient()
+    return SmartMockLLMClient()
 
 
 __all__ = [
@@ -33,5 +33,6 @@ __all__ = [
     "LLMError",
     "MockExhaustedError",
     "MockLLMClient",
+    "SmartMockLLMClient",
     "get_llm_client",
 ]
