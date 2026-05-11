@@ -6,7 +6,7 @@ Intent routing, portfolio analytics, and streaming responses for Valura’s AI c
 
 ## Defence Video
 
-**[Defence Video Link - will add it later]**
+**[Defence walkthrough (Loom)](https://www.loom.com/share/dda77d0b03b0497ba840a287b02ce007)**
 
 ---
 
@@ -72,10 +72,11 @@ Happy path on this codebase is dominated by **yfinance** round-trips plus **two*
 
 Rough order-of-magnitude at published **gpt-4.1**-class pricing (check OpenAI’s current page before quoting externally):
 
-| Step | Tokens (indicative) | Notes |
-|------|---------------------|--------|
-| Classifier | ~500 in / ~100 out | System taxonomy + entity vocab + user query |
-| Portfolio observations | ~800 in / ~200 out | Metrics JSON + profile summary |
+
+| Step                   | Tokens (indicative) | Notes                                       |
+| ---------------------- | ------------------- | ------------------------------------------- |
+| Classifier             | ~500 in / ~100 out  | System taxonomy + entity vocab + user query |
+| Portfolio observations | ~800 in / ~200 out  | Metrics JSON + profile summary              |
 
 Using current pricing **$2 / 1M input tokens** and **$8 / 1M output tokens**:
 
@@ -113,13 +114,14 @@ cp .env.example .env
 
 ### Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | No | — | If unset/empty, **`MockLLMClient`** is selected automatically |
-| `LLM_MODEL` | No | `gpt-4o-mini` | Chat model id (`OPENAI_MODEL` alias supported for backwards compatibility) |
-| `PIPELINE_TIMEOUT` | No | `30` | Max seconds for the `/chat` generator (float allowed) |
-| `LOG_LEVEL` | No | `INFO` | Root log level (`DEBUG`, `INFO`, …) |
-| `APP_ENV` | No | — | Set to `test` in CI workflows if you branch on it |
+
+| Variable           | Required | Default       | Description                                                                |
+| ------------------ | -------- | ------------- | -------------------------------------------------------------------------- |
+| `OPENAI_API_KEY`   | No       | —            | If unset/empty,**`MockLLMClient`** is selected automatically               |
+| `LLM_MODEL`        | No       | `gpt-4o-mini` | Chat model id (`OPENAI_MODEL` alias supported for backwards compatibility) |
+| `PIPELINE_TIMEOUT` | No       | `30`          | Max seconds for the`/chat` generator (float allowed)                       |
+| `LOG_LEVEL`        | No       | `INFO`        | Root log level (`DEBUG`, `INFO`, …)                                       |
+| `APP_ENV`          | No       | —            | Set to`test` in CI workflows if you branch on it                           |
 
 See `.env.example` for optional persistence/cache placeholders used in broader designs.
 
@@ -160,11 +162,12 @@ PY
 
 **Methodology:** micro-benchmarks on a developer laptop (Python 3.13, May 2026) — **not** production SLA data. For HTTP p95 under load, rerun with **wrk**/k6 against `POST /chat` with a representative body.
 
-| Measurement | Result | Notes |
-|-------------|--------|--------|
-| Safety guard | **~0.003 ms** avg over **500** calls (`check("how is my portfolio doing")`) | Pure CPU regex path |
-| Portfolio health (mock LLM + live yfinance) | **~2.5–3.0 s** warm requests; **~5 s** first call after import | Dominated by Yahoo Finance round-trips |
-| Full test suite `pytest tests/ -v` | **~11 s** wall clock | Includes network-bound portfolio tests |
+
+| Measurement                                 | Result                                                                      | Notes                                  |
+| ------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------- |
+| Safety guard                                | **~0.003 ms** avg over **500** calls (`check("how is my portfolio doing")`) | Pure CPU regex path                    |
+| Portfolio health (mock LLM + live yfinance) | **~2.5–3.0 s** warm requests; **~5 s** first call after import             | Dominated by Yahoo Finance round-trips |
+| Full test suite`pytest tests/ -v`           | **~11 s** wall clock                                                        | Includes network-bound portfolio tests |
 
 **First-byte SSE latency** for `/chat` was not stress-tested with concurrent clients in this submission — recommend measuring after deploying behind your ASGI server of choice.
 
@@ -172,30 +175,32 @@ PY
 
 ## Library Choices
 
-| Library | Why |
-|---------|-----|
-| **FastAPI** | Async-first, native Pydantic v2 models for request validation |
-| **sse-starlette** | Correct SSE framing (`EventSourceResponse`), ping & disconnect semantics |
-| **yfinance** | Free equity/FX snapshots without vendor signup; good global ticker coverage |
-| **pydantic v2** | Strict schemas (`extra="forbid"`), fast validation, JSON ergonomics |
-| **pytest-asyncio** | First-class async tests matching production coroutines |
-| **httpx** | Async-capable client for integration tests / tooling |
+
+| Library            | Why                                                                         |
+| ------------------ | --------------------------------------------------------------------------- |
+| **FastAPI**        | Async-first, native Pydantic v2 models for request validation               |
+| **sse-starlette**  | Correct SSE framing (`EventSourceResponse`), ping & disconnect semantics    |
+| **yfinance**       | Free equity/FX snapshots without vendor signup; good global ticker coverage |
+| **pydantic v2**    | Strict schemas (`extra="forbid"`), fast validation, JSON ergonomics         |
+| **pytest-asyncio** | First-class async tests matching production coroutines                      |
+| **httpx**          | Async-capable client for integration tests / tooling                        |
 
 ---
 
 ## Repository Layout
 
-| Path | Role |
-|------|------|
-| `src/main.py` | FastAPI app, `/chat` SSE pipeline |
-| `src/safety.py` | Rule-based safety guard |
-| `src/classifier.py` | Intent classifier (`IntentClassifier`) |
-| `src/router.py` | Agent routing |
-| `src/agents/portfolio_health.py` | Full portfolio agent |
-| `src/agents/stub.py` | Placeholder responses |
-| `src/session.py` | In-memory sessions + optional query dedupe cache |
-| `src/llm/` | `LLMClient` ABC, OpenAI + mock implementations |
-| `fixtures/` | Labeled queries and user profiles for tests |
-| `tests/` | pytest suite (passes without API keys) |
+
+| Path                             | Role                                             |
+| -------------------------------- | ------------------------------------------------ |
+| `src/main.py`                    | FastAPI app,`/chat` SSE pipeline                 |
+| `src/safety.py`                  | Rule-based safety guard                          |
+| `src/classifier.py`              | Intent classifier (`IntentClassifier`)           |
+| `src/router.py`                  | Agent routing                                    |
+| `src/agents/portfolio_health.py` | Full portfolio agent                             |
+| `src/agents/stub.py`             | Placeholder responses                            |
+| `src/session.py`                 | In-memory sessions + optional query dedupe cache |
+| `src/llm/`                       | `LLMClient` ABC, OpenAI + mock implementations   |
+| `fixtures/`                      | Labeled queries and user profiles for tests      |
+| `tests/`                         | pytest suite (passes without API keys)           |
 
 Assignment brief and rubric context remain in [`ASSIGNMENT.md`](ASSIGNMENT.md).
