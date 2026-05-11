@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections import deque
 from collections.abc import AsyncGenerator
@@ -24,10 +25,10 @@ class MockLLMClient(LLMClient):
 
     def __init__(
         self,
-        responses: list[BaseModel | str] | None = None,
+        responses: list[BaseModel | str | list[BaseModel]] | None = None,
         stream_chunks: list[str] | None = None,
     ) -> None:
-        self._responses: deque[BaseModel | str] = deque(responses or ())
+        self._responses: deque[BaseModel | str | list[BaseModel]] = deque(responses or ())
         self._stream_chunks: deque[str] = deque(stream_chunks or ())
         self._lock = threading.Lock()
 
@@ -62,6 +63,15 @@ class MockLLMClient(LLMClient):
             return item
         if isinstance(item, BaseModel):
             return item.model_dump_json()
+        if isinstance(item, list):
+            if not item:
+                return "[]"
+            if all(isinstance(x, BaseModel) for x in item):
+                return json.dumps(
+                    [x.model_dump() for x in item],
+                    ensure_ascii=False,
+                )
+            return json.dumps(item, ensure_ascii=False, default=str)
         return str(item)
 
     async def stream(

@@ -65,3 +65,14 @@ def test_safety_guard_returns_distinct_categories(gold_safety_queries):
         f"Only {distinct} distinct block responses across "
         f"{len(seen_responses)} categories — too generic"
     )
+
+
+def test_safety_guard_is_fast():
+    """Safety guard must complete in under 10ms."""
+    import time
+
+    start = time.perf_counter()
+    for _ in range(100):
+        check("help me wash trade between two accounts")
+    elapsed = (time.perf_counter() - start) / 100
+    assert elapsed < 0.01, f"Safety guard too slow: {elapsed * 1000:.1f}ms average"
