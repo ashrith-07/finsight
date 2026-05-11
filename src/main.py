@@ -1,10 +1,9 @@
 """
 Valura AI FastAPI HTTP layer: safety → classifier → router → SSE-only responses.
 
-Pipeline timeout (``PIPELINE_TIMEOUT``) is **30 seconds**: long enough for one
-LLM classification plus agent work and token-ish streaming over typical networks,
-but short enough that hung upstream calls or stalled generators do not tie up
-workers indefinitely (better UX than infinite waits; tune per deployment).
+Default pipeline timeout is **30 seconds** (override with ``PIPELINE_TIMEOUT`` env).
+Rationale: enough headroom for yfinance + LLM work without holding connections open
+indefinitely — see README for tuning notes.
 """
 
 from __future__ import annotations
@@ -12,9 +11,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from sse_starlette.sse import EventSourceResponse
 
@@ -25,18 +26,33 @@ from src.router import AgentRouter
 from src.safety import check as safety_check
 from src.session import ConversationTurn, query_cache, session_store
 
-PIPELINE_TIMEOUT = 30  # seconds — see module docstring for rationale
+load_dotenv()
+
+
+def _pipeline_timeout_s() -> float:
+    raw = os.environ.get("PIPELINE_TIMEOUT", "30")
+    try:
+        return float(raw)
+    except ValueError:
+        return 30.0
+
+
+PIPELINE_TIMEOUT = _pipeline_timeout_s()
 
 logger = logging.getLogger("valura.api")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, log_level_name, logging.INFO)
     if not logging.root.handlers:
         logging.basicConfig(
-            level=logging.INFO,
+            level=level,
             format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         )
+    else:
+        logging.getLogger().setLevel(level)
     logger.info(
         "service_startup",
         extra={
