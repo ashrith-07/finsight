@@ -17,6 +17,7 @@ openai>=1.30.0             # OpenAI Python SDK — structured outputs, streaming
 
 # --- Utilities ---
 python-dotenv>=1.0.0
+tenacity>=8.2.0
 
 # --- Market data (portfolio health agent) ---
 yfinance>=0.2.40

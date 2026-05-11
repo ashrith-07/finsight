@@ -6,17 +6,19 @@ Live prices come from yfinance (requires network in CI).
 """
 import pytest
 
-from src.agents.portfolio_health import run
+from src.agents.portfolio_health import _ObservationList, run
 from src.llm.mock_llm import MockLLMClient
 from src.models import Observation
 
 
 def make_portfolio_mock() -> MockLLMClient:
-    observations = [
-        Observation(severity="warning", text="Test warning observation."),
-        Observation(severity="info", text="Test info observation."),
-    ]
-    return MockLLMClient(responses=[observations])
+    obs_list = _ObservationList(
+        observations=[
+            Observation(severity="warning", text="Test warning observation."),
+            Observation(severity="info", text="Test info observation."),
+        ]
+    )
+    return MockLLMClient(responses=[obs_list])
 
 
 @pytest.mark.asyncio

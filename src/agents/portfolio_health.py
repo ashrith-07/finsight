@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import yfinance as yf
+from pydantic import BaseModel
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.llm.base import LLMClient
 from src.models import (
@@ -30,6 +32,10 @@ DISCLAIMER = (
 )
 
 DEFAULT_BENCHMARK_RETURN_PCT = 14.2
+
+
+class _ObservationList(BaseModel):
+    observations: list[Observation]
 
 
 @dataclass
@@ -261,18 +267,39 @@ async def _snapshot_fx_to_usd() -> dict[str, float]:
     return out
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception_type(Exception),
+    reraise=False,
+)
+async def _fetch_with_retry(tickers: list[str]) -> dict[str, float | None]:
+    async def fetch_sym(sym: str) -> tuple[str, float | None]:
+        px = await asyncio.to_thread(_thread_last_close, sym)
+        return sym, px
+
+    fetched = await asyncio.gather(*[fetch_sym(t) for t in tickers])
+    prices = {sym: px for sym, px in fetched}
+    if tickers and all(v is None for v in prices.values()):
+        raise RuntimeError("all yfinance quote fetches returned None")
+    return prices
+
+
 async def _fetch_prices(positions: list[dict]) -> tuple[dict[str, float], list[str]]:
     """Last close per ticker in Yahoo's listing currency; warns when falling back to ``avg_cost``."""
     tickers = list({str(p.get("ticker") or "").strip() for p in positions if p.get("ticker")})
     warnings: list[str] = []
     prices_local: dict[str, float] = {}
 
-    async def fetch_sym(sym: str) -> tuple[str, float | None]:
-        px = await asyncio.to_thread(_thread_last_close, sym)
-        return sym, px
+    fetched_map: dict[str, float | None]
+    try:
+        fetched_map = await _fetch_with_retry(tickers)
+    except Exception as e:
+        logger.debug("yfinance retry wrapper failed: %s", e)
+        fetched_map = {}
 
-    fetched = await asyncio.gather(*[fetch_sym(t) for t in tickers])
-    for sym, px in fetched:
+    for sym in tickers:
+        px = fetched_map.get(sym)
         if px is None:
             # avg_cost matches position currency when quote is missing
             pcost = next((p for p in positions if str(p.get("ticker")) == sym), None)
@@ -467,26 +494,13 @@ async def _generate_observations(
     try:
         raw = await llm.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": user_msg}],
-            response_model=None,
+            response_model=_ObservationList,
             temperature=0.3,
             max_tokens=900,
         )
-        if not isinstance(raw, str):
-            raise TypeError("LLM returned non-string")
-        text = raw.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        data = json.loads(text)
-        if not isinstance(data, list):
-            raise ValueError("Expected JSON array")
-        out: list[Observation] = []
-        for item in data[:4]:
-            if not isinstance(item, dict):
-                continue
-            sev = str(item.get("severity") or "info").lower()
-            txt = str(item.get("text") or "").strip()
-            if txt:
-                out.append(Observation(severity=sev, text=txt))
+        if not isinstance(raw, _ObservationList):
+            raise TypeError("LLM returned non-_ObservationList response")
+        out = raw.observations[:4]
         if concentration.top_position_pct > 40 and not any(
             "concentrat" in o.text.lower() or "nvda" in o.text.lower() for o in out
         ):
