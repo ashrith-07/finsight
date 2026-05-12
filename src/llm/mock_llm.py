@@ -144,6 +144,42 @@ def _is_observation_prompt(messages: list[dict]) -> bool:
     return isinstance(blob, dict) and "concentration" in blob
 
 
+def _is_market_research_system(messages: list[dict]) -> bool:
+    return "concise market analyst" in _system_prefix(messages)
+
+
+def _is_market_comparison_prompt(messages: list[dict]) -> bool:
+    # Comparison prompt mentions this verbatim; observation prompt does not.
+    return "compare the supplied stocks" in _system_prefix(messages).lower()
+
+
+def _market_comparison_fallback(user_msg: str) -> str:
+    try:
+        data = json.loads(user_msg)
+    except (json.JSONDecodeError, TypeError):
+        return "Comparison unavailable in demo mode."
+    snaps = data.get("snapshots") if isinstance(data, dict) else None
+    if not snaps or len(snaps) < 2:
+        return "Comparison unavailable in demo mode."
+
+    def _dir(p: float) -> str:
+        return "up" if p >= 0 else "down"
+
+    a, b = snaps[0], snaps[1]
+    try:
+        return (
+            f"{a['ticker']} is {_dir(float(a['day_change_pct']))} "
+            f"{abs(float(a['day_change_pct'])):.2f}% today vs "
+            f"{b['ticker']} {_dir(float(b['day_change_pct']))} "
+            f"{abs(float(b['day_change_pct'])):.2f}% today."
+        )
+    except (KeyError, TypeError, ValueError):
+        return "Comparison unavailable in demo mode."
+
+
+_EMPTY_OBS_LIST_JSON = '{"observations": []}'
+
+
 def _extract_tickers(query: str) -> list[str]:
     upper = query.upper()
     found: list[str] = []
@@ -293,6 +329,14 @@ class SmartMockLLMClient(LLMClient):
             if response_model is not None:
                 return response_model.model_validate_json(raw)
             return raw
+        if _is_market_research_system(messages):
+            if _is_market_comparison_prompt(messages):
+                return _market_comparison_fallback(_last_user_text(messages))
+            # Empty observation list lets MarketResearchAgent fall back to
+            # snapshot-aware defaults without raising/logging an exception.
+            if response_model is not None:
+                return response_model.model_validate_json(_EMPTY_OBS_LIST_JSON)
+            return _EMPTY_OBS_LIST_JSON
         if _is_observation_prompt(messages):
             return _observation_json()
         raw = _classifier_json(_last_user_text(messages))
