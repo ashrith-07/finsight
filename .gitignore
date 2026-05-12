@@ -36,3 +36,7 @@ Thumbs.db
 # Misc
 *.log
 tmp/
+
+# Generated MCP report artefacts (regenerated per request)
+reports/*
+!reports/.gitkeep
