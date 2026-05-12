@@ -6,7 +6,7 @@ Intent routing, portfolio analytics, and streaming responses for Valura’s AI c
 
 ## Defence Video
 
-**[Defence walkthrough (Loom)](https://www.loom.com/share/dda77d0b03b0497ba840a287b02ce007)**
+**[Defence walkthrough (Loom)](https://www.loom.com/share/0bab3c411f05459c8d6bb514b26ad242)**
 
 ---
 
