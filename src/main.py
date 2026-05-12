@@ -102,7 +102,10 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
     router = AgentRouter(llm)
 
     async def event_generator():
-        start = time.monotonic()
+        t0 = time.monotonic()
+        t_safety = 0.0
+        t_classify = 0.0
+        t_agent = 0.0
         logger.info(
             "chat_request_started",
             extra={
@@ -115,11 +118,13 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
         )
         try:
             async with asyncio.timeout(PIPELINE_TIMEOUT):
+                t_safety_start = time.monotonic()
                 verdict = safety_check(request.query)
+                t_safety = time.monotonic() - t_safety_start
                 if verdict.blocked:
                     yield _sse("delta", verdict.message)
                     yield _sse("done", "")
-                    elapsed = time.monotonic() - start
+                    elapsed = time.monotonic() - t0
                     logger.info(
                         "chat_request_blocked",
                         extra={
@@ -133,6 +138,7 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                     return
 
                 cached = query_cache.get(request.session_id, request.query)
+                t_classify_start = time.monotonic()
                 if cached is not None:
                     classifier_result = cached
                 else:
@@ -151,8 +157,11 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                     query_cache.set(
                         request.session_id, request.query, classifier_result
                     )
+                t_classify = time.monotonic() - t_classify_start
 
+                t_agent_start = time.monotonic()
                 agent_response = await router.route(classifier_result, request.user)
+                t_agent = time.monotonic() - t_agent_start
 
                 summary = _build_summary(agent_response)
                 for word in summary.split():
@@ -172,17 +181,15 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                     ),
                 )
 
-                elapsed = time.monotonic() - start
+                t_total = time.monotonic() - t0
                 logger.info(
-                    "chat_request_completed",
-                    extra={
-                        "event": "chat",
-                        "phase": "done",
-                        "session_id": request.session_id,
-                        "agent": agent_response.agent,
-                        "implemented": agent_response.implemented,
-                        "elapsed_s": round(elapsed, 3),
-                    },
+                    "request completed | "
+                    f"session={request.session_id} | "
+                    f"agent={agent_response.agent} | "
+                    f"safety={t_safety*1000:.1f}ms | "
+                    f"classify={t_classify*1000:.1f}ms | "
+                    f"agent={t_agent*1000:.1f}ms | "
+                    f"total={t_total*1000:.1f}ms"
                 )
                 yield _sse("done", "")
 
