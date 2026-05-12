@@ -19,15 +19,15 @@ from src.agents import (
     ReportGeneratorAgent,
     RiskAnalysisAgent,
 )
+from src.agents.stub import StubAgent
 from src.llm.base import LLMClient
 from src.models import AgentResponse, ClassifierResult, Entity, PortfolioHealthResult
-from src.router import AgentRouter
 
 logger = logging.getLogger("valura.orchestrator")
 
 
 class ValuraOrchestrator:
-    """Coordinates portfolio, market, risk, news, and report flows; delegates stubs to ``AgentRouter``."""
+    """Coordinates portfolio, market, risk, news, and report flows; delegates unknown agents to ``StubAgent``."""
 
     PARALLEL_PAIRS = {
         "market_research": ["news_agent"],
@@ -49,7 +49,7 @@ class ValuraOrchestrator:
         self._risk = RiskAnalysisAgent(llm)
         self._news = FinancialNewsAgent(llm)
         self._report = ReportGeneratorAgent(llm)
-        self._router = AgentRouter(llm)
+        self._stub = StubAgent()
         self._team: Team | None = None
         self._meta_agent: Agent | None = None
 
@@ -97,7 +97,7 @@ class ValuraOrchestrator:
         agent = classifier_result.agent or "general_query"
         entities = classifier_result.entities
 
-        if self._wants_report(intent):
+        if agent == "report_generator" or self._wants_report(intent):
             payload = await self._run_report_ecosystem(entities, user, intent)
             return self._build_agent_response(
                 "report_generator",
@@ -105,6 +105,16 @@ class ValuraOrchestrator:
                 entities,
                 payload,
                 message=self._message_for_report(payload),
+            )
+
+        if agent == "financial_news":
+            payload = await self._run_news_ecosystem(entities, user)
+            return self._build_agent_response(
+                "financial_news",
+                intent,
+                entities,
+                {"market_news": payload},
+                message=self._message_for_news(payload),
             )
 
         if agent == "portfolio_health":
@@ -157,17 +167,7 @@ class ValuraOrchestrator:
                 message=self._message_for_risk_ecosystem(combined),
             )
 
-        if self._is_news_focused(agent, entities):
-            payload = await self._run_news_ecosystem(entities, user)
-            return self._build_agent_response(
-                agent,
-                intent,
-                entities,
-                {"market_news": payload},
-                message=self._message_for_news(payload),
-            )
-
-        return await self._router.route(classifier_result, user)
+        return await self._stub.run(agent, intent, entities)
 
     # --- ecosystems ---------------------------------------------------------
 
@@ -433,11 +433,6 @@ class ValuraOrchestrator:
         if self._REPORT_MARKET_RX.search(low) or (tickers and "portfolio" not in low and "report" in low):
             return "market"
         return "portfolio"
-
-    def _is_news_focused(self, agent: str, entities: Entity) -> bool:
-        if agent in ("general_query", "predictive_analysis", "customer_support"):
-            return bool(entities.tickers or entities.topics)
-        return False
 
     def _message_for_portfolio(self, combined: dict[str, Any]) -> str:
         ph = combined.get("portfolio_health") or {}

@@ -16,7 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 from src.classifier import classify
 from src.llm import get_llm_client
 from src.models import AgentResponse, ChatRequest, PortfolioHealthResult
-from src.orchestrator import ValuraOrchestrator
+from src.router import AgentRouter
 from src.safety import check as safety_check
 from src.session import ConversationTurn, query_cache, session_store
 
@@ -47,6 +47,10 @@ async def lifespan(app: FastAPI):
         )
     else:
         logging.getLogger().setLevel(level)
+    logger.info(
+        "Valura AI multi-agent ecosystem starting | "
+        "agents=5 | mcp_servers=3 | orchestrator=ValuraOrchestrator"
+    )
     logger.info(
         "service_startup",
         extra={
@@ -113,7 +117,7 @@ def _build_summary(response: AgentResponse) -> str:
 async def chat(request: ChatRequest) -> EventSourceResponse:
     """SSE only: ``delta`` (summary chunks), ``result`` (JSON), optional ``error``, trailing ``done``."""
     llm = get_llm_client()
-    orchestrator = ValuraOrchestrator(llm)
+    router = AgentRouter(llm)
 
     async def event_generator():
         t0 = time.monotonic()
@@ -174,7 +178,7 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                 t_classify = time.monotonic() - t_classify_start
 
                 t_agent_start = time.monotonic()
-                agent_response = await orchestrator.run(classifier_result, request.user)
+                agent_response = await router.route(classifier_result, request.user)
                 t_agent = time.monotonic() - t_agent_start
 
                 summary = _build_summary(agent_response)
@@ -253,3 +257,57 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "valura-ai"}
+
+
+@app.get("/agents")
+async def list_agents() -> dict:
+    """Lists agents in the ecosystem with coarse status."""
+    return {
+        "total_agents": 5,
+        "orchestrator": "ValuraOrchestrator",
+        "mcp_servers": ["yfinance_mcp", "web_search_mcp", "report_mcp"],
+        "agents": [
+            {
+                "name": "portfolio_health",
+                "status": "implemented",
+                "description": "Portfolio analysis, concentration risk, benchmark comparison",
+                "parallel_with": ["risk_analysis", "news_agent"],
+            },
+            {
+                "name": "market_research",
+                "status": "implemented",
+                "description": "Live stock data, company fundamentals, price snapshots",
+                "parallel_with": ["news_agent"],
+            },
+            {
+                "name": "risk_analysis",
+                "status": "implemented",
+                "description": "VaR, max drawdown, Sharpe ratio, stress testing",
+                "parallel_with": ["portfolio_health"],
+            },
+            {
+                "name": "financial_news",
+                "status": "implemented",
+                "description": "Real-time news aggregation with sentiment scoring",
+                "parallel_with": ["any primary agent"],
+            },
+            {
+                "name": "report_generator",
+                "status": "implemented",
+                "description": "PDF and Markdown report generation",
+                "parallel_with": [],
+            },
+            {
+                "name": "financial_calculator",
+                "status": "stub",
+                "description": "Coming soon",
+                "parallel_with": [],
+            },
+            {
+                "name": "investment_strategy",
+                "status": "stub",
+                "description": "Coming soon",
+                "parallel_with": [],
+            },
+        ],
+    }
