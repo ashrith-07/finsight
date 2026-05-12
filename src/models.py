@@ -91,6 +91,45 @@ class PortfolioHealthResult(BaseModel):
     build_guidance: str | None = None
 
 
+class PriceSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ticker: str
+    current_price: float
+    currency: str
+    day_open: float
+    day_high: float
+    day_low: float
+    previous_close: float
+    day_change_pct: float
+    volume: int
+    market_cap: float | None
+    fifty_two_week_high: float
+    fifty_two_week_low: float
+    distance_from_52w_high_pct: float
+
+
+class CompanyInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    sector: str | None
+    industry: str | None
+    country: str | None
+    summary: str | None
+
+
+class MarketResearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tickers: list[str]
+    snapshots: list[PriceSnapshot]
+    company_info: list[CompanyInfo]
+    observations: list[Observation]
+    comparison_note: str | None = None
+    disclaimer: str
+
+
 class AgentResponse(BaseModel):
     """``implemented`` distinguishes real agents from stubs; ``result`` may be a dict for forwards compat."""
 
@@ -100,7 +139,7 @@ class AgentResponse(BaseModel):
     implemented: bool
     intent: str
     entities: Entity
-    result: PortfolioHealthResult | dict | None
+    result: PortfolioHealthResult | MarketResearchResult | dict | None
     message: str
 
 

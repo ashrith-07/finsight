@@ -176,7 +176,15 @@ def _route_agent(query: str) -> str:
         return "market_research"
     if "how is" in q and "doing" in q:
         return "market_research"
-    market_kw = ("price of", "tell me about", "news on", "what happened")
+    market_kw = (
+        "price of",
+        "tell me about",
+        "news on",
+        "news about",
+        "what happened",
+        "what is happening",
+        "what's happening",
+    )
     if any(k in q for k in market_kw):
         return "market_research"
 
