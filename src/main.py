@@ -16,7 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 from src.classifier import classify
 from src.llm import get_llm_client
 from src.models import AgentResponse, ChatRequest, PortfolioHealthResult
-from src.router import AgentRouter
+from src.orchestrator import ValuraOrchestrator
 from src.safety import check as safety_check
 from src.session import ConversationTurn, query_cache, session_store
 
@@ -82,8 +82,22 @@ def _build_summary(response: AgentResponse) -> str:
             obs_text = " ".join(o.text for o in observations)
             return f"{obs_text} {result.disclaimer}".strip()
         if isinstance(result, dict):
+            nested = result.get("portfolio_health")
+            if isinstance(nested, dict):
+                observations = nested.get("observations") or []
+                parts: list[str] = []
+                for o in observations[:2]:
+                    if isinstance(o, dict):
+                        parts.append(str(o.get("text") or ""))
+                    elif hasattr(o, "text"):
+                        parts.append(str(getattr(o, "text")))
+                obs_text = " ".join(parts)
+                disc = str(nested.get("disclaimer") or "")
+                summ = str(result.get("ecosystem_summary") or "").strip()
+                base = f"{obs_text} {disc}".strip()
+                return f"{summ} {base}".strip() if summ else base
             observations = result.get("observations") or []
-            parts: list[str] = []
+            parts = []
             for o in observations[:2]:
                 if isinstance(o, dict):
                     parts.append(str(o.get("text") or ""))
@@ -99,7 +113,7 @@ def _build_summary(response: AgentResponse) -> str:
 async def chat(request: ChatRequest) -> EventSourceResponse:
     """SSE only: ``delta`` (summary chunks), ``result`` (JSON), optional ``error``, trailing ``done``."""
     llm = get_llm_client()
-    router = AgentRouter(llm)
+    orchestrator = ValuraOrchestrator(llm)
 
     async def event_generator():
         t0 = time.monotonic()
@@ -160,7 +174,7 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                 t_classify = time.monotonic() - t_classify_start
 
                 t_agent_start = time.monotonic()
-                agent_response = await router.route(classifier_result, request.user)
+                agent_response = await orchestrator.run(classifier_result, request.user)
                 t_agent = time.monotonic() - t_agent_start
 
                 summary = _build_summary(agent_response)
