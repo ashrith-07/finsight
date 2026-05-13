@@ -14,6 +14,7 @@ pydantic>=2.7.0
 
 # --- LLM ---
 openai>=1.30.0             # OpenAI Python SDK — structured outputs, streaming
+groq>=0.11.0               # Groq SDK (preferred provider when GROQ_API_KEY is set)
 
 # --- Utilities ---
 python-dotenv>=1.0.0

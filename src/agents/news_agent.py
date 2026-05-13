@@ -72,11 +72,11 @@ class FinancialNewsAgent:
         """Lazily build an Agno agent so this capability can also be invoked tool-style."""
         if self._agno is None:
             try:
-                from agno.models.openai import OpenAIChat
+                from src.llm.agno_model import make_agno_model
 
                 self._agno = Agent(
                     name="financial_news",
-                    model=OpenAIChat(id="gpt-4o-mini"),
+                    model=make_agno_model(),
                     tools=[self._search, self._yf],
                     instructions=INSTRUCTIONS,
                 )

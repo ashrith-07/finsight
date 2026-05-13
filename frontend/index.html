@@ -686,7 +686,9 @@
 
     /**
      * Parse a stream of SSE-style frames separated by blank lines.
-     * Each frame contains `event:` and `data:` lines per the SSE spec.
+     * sse-starlette emits CRLF (`\r\n\r\n`); the spec also allows LF (`\n\n`)
+     * and bare CR (`\r\r`). We normalise CR to LF before scanning so a single
+     * indexOf('\n\n') handles every case.
      */
     async function consumeSse(stream, handlers) {
       const reader = stream.getReader();
@@ -695,7 +697,7 @@
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n?/g, '\n');
 
         let sep;
         while ((sep = buffer.indexOf('\n\n')) >= 0) {

@@ -134,14 +134,17 @@ def _is_classifier_prompt(messages: list[dict]) -> bool:
 
 
 def _is_observation_prompt(messages: list[dict]) -> bool:
-    if "plain-language financial health analyst" in _system_prefix(messages):
+    sys = _system_prefix(messages)
+    if "plain-language financial health analyst" in sys:
+        return True
+    if "portfolio risk analyst" in sys:
         return True
     u = _last_user_text(messages)
     try:
         blob = json.loads(u)
     except (json.JSONDecodeError, TypeError):
         return False
-    return isinstance(blob, dict) and "concentration" in blob
+    return isinstance(blob, dict) and ("concentration" in blob or "var" in blob)
 
 
 def _is_market_research_system(messages: list[dict]) -> bool:
@@ -275,22 +278,29 @@ def _classifier_json(query: str) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+_DEMO_OBSERVATIONS = [
+    {
+        "severity": "info",
+        "text": (
+            "Demo mode: connect GROQ_API_KEY (or OPENAI_API_KEY) for observations "
+            "tailored to your specific metrics."
+        ),
+    },
+    {
+        "severity": "warning",
+        "text": "Verify figures against your custodian before acting.",
+    },
+]
+
+
 def _observation_json() -> str:
-    return json.dumps(
-        [
-            {
-                "severity": "info",
-                "text": (
-                    "Demo mode: connect OPENAI_API_KEY for observations tailored to your metrics."
-                ),
-            },
-            {
-                "severity": "warning",
-                "text": "Verify figures against your custodian before acting.",
-            },
-        ],
-        ensure_ascii=False,
-    )
+    """Legacy raw-array shape used by the original portfolio observation parser."""
+    return json.dumps(_DEMO_OBSERVATIONS, ensure_ascii=False)
+
+
+def _observation_envelope_json() -> str:
+    """Envelope shape consumed by ``_ObservationList`` / ``_ObsList`` Pydantic models."""
+    return json.dumps({"observations": _DEMO_OBSERVATIONS}, ensure_ascii=False)
 
 
 def _stream_message(agent: str, query: str) -> str:
@@ -338,6 +348,10 @@ class SmartMockLLMClient(LLMClient):
                 return response_model.model_validate_json(_EMPTY_OBS_LIST_JSON)
             return _EMPTY_OBS_LIST_JSON
         if _is_observation_prompt(messages):
+            # When the agent asks for a Pydantic envelope, return the wrapped shape;
+            # otherwise return the legacy raw JSON array for backward compatibility.
+            if response_model is not None:
+                return response_model.model_validate_json(_observation_envelope_json())
             return _observation_json()
         raw = _classifier_json(_last_user_text(messages))
         if response_model is not None:

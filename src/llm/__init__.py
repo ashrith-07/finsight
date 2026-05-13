@@ -19,12 +19,18 @@ def _resolved_model(explicit: str | None) -> str:
 
 
 def get_llm_client(model: str | None = None) -> LLMClient:
-    """OpenAI when ``OPENAI_API_KEY`` is set; else keyword SmartMock (demos / no key). Model resolution unchanged."""
+    """Provider precedence: ``GROQ_API_KEY`` > ``OPENAI_API_KEY`` > ``SmartMockLLMClient`` (no key)."""
+    if os.environ.get("GROQ_API_KEY", "").strip():
+        # Lazy import keeps ``groq`` off the test/CI critical path.
+        from src.llm.groq_llm import GroqLLMClient
+
+        return GroqLLMClient(model=model)
+
     if os.environ.get("OPENAI_API_KEY", "").strip():
-        # Avoid importing ``openai`` on the mock-only path (tests / CI).
         from src.llm.openai_llm import OpenAILLMClient
 
         return OpenAILLMClient(model=_resolved_model(model))
+
     return SmartMockLLMClient()
 
 

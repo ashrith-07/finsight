@@ -55,11 +55,11 @@ class ValuraOrchestrator:
 
     def _ensure_team(self) -> Team:
         if self._team is None:
-            from agno.models.openai import OpenAIChat
+            from src.llm.agno_model import make_agno_model
 
             self._team = Team(
                 name="valura_team",
-                model=OpenAIChat(id="gpt-4o-mini"),
+                model=make_agno_model(),
                 members=[
                     self._risk.as_agno_agent(),
                     self._news.as_agno_agent(),
@@ -76,11 +76,11 @@ class ValuraOrchestrator:
     def _ensure_meta_agent(self) -> Agent:
         """Thin Agno shell used as the orchestrator's framework anchor (dispatch stays imperative)."""
         if self._meta_agent is None:
-            from agno.models.openai import OpenAIChat
+            from src.llm.agno_model import make_agno_model
 
             self._meta_agent = Agent(
                 name="valura_orchestrator",
-                model=OpenAIChat(id="gpt-4o-mini"),
+                model=make_agno_model(),
                 tools=[],
                 instructions=(
                     "You are the Valura orchestrator meta-agent. Runtime routing is handled in "
