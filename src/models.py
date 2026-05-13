@@ -145,8 +145,8 @@ class ExecutionMetadata(BaseModel):
     """Per-request execution telemetry — surfaces parallel agent timings to the UI.
 
     ``timings`` maps agent_name → milliseconds. ``wall_time_ms`` is the total
-    awaited time; ``sequential_estimate_ms`` is the naive sum (i.e. what the
-    same work would have cost run one-after-another). ``saved_ms`` highlights
+    awaited time; ``sequential_time_ms`` is the naive sum (i.e. what the same
+    work would have cost run one-after-another). ``time_saved_ms`` highlights
     the parallelism win.
     """
 
@@ -156,8 +156,8 @@ class ExecutionMetadata(BaseModel):
     timings: dict[str, int] = Field(default_factory=dict)
     parallel: bool = False
     wall_time_ms: int = 0
-    sequential_estimate_ms: int = 0
-    saved_ms: int = 0
+    sequential_time_ms: int = 0
+    time_saved_ms: int = 0
 
 
 class AgentResponse(BaseModel):

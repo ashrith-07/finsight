@@ -1636,8 +1636,8 @@
         .join('');
 
       const wall = meta.wall_time_ms || 0;
-      const seq = meta.sequential_estimate_ms || 0;
-      const saved = meta.saved_ms || 0;
+      const seq = meta.sequential_time_ms || 0;
+      const saved = meta.time_saved_ms || 0;
       const summary = meta.parallel
         ? `<div class="tl-summary">
              <span>Wall: <strong>${wall} ms</strong> (parallel)</span>

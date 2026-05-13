@@ -79,8 +79,8 @@ class StubAgent:
             timings={name: ms},
             parallel=False,
             wall_time_ms=ms,
-            sequential_estimate_ms=ms,
-            saved_ms=0,
+            sequential_time_ms=ms,
+            time_saved_ms=0,
         )
 
     def _summarize_entities(self, entities: Entity) -> str:

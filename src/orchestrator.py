@@ -201,8 +201,8 @@ class ValuraOrchestrator:
                 timings={agent or "general_query": stub_ms},
                 parallel=False,
                 wall_time_ms=stub_ms,
-                sequential_estimate_ms=stub_ms,
-                saved_ms=0,
+                sequential_time_ms=stub_ms,
+                time_saved_ms=0,
             )
         })
 
@@ -603,8 +603,8 @@ class ValuraOrchestrator:
             timings=timings,
             parallel=len(agents_ran) > 1,
             wall_time_ms=wall,
-            sequential_estimate_ms=seq_ms,
-            saved_ms=max(0, seq_ms - wall),
+            sequential_time_ms=seq_ms,
+            time_saved_ms=max(0, seq_ms - wall),
         )
 
     # --- helpers ------------------------------------------------------------
