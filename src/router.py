@@ -16,9 +16,12 @@ ORCHESTRATED = frozenset(
         "portfolio_health",
         "market_research",
         "risk_assessment",
+        "financial_news",
+        "report_generator",
     }
 )
 
+# Soft remaps: classifier categories that should reach a concrete agent.
 NEWS_INTENTS = frozenset({"predictive_analysis"})
 
 REPORT_INTENTS = frozenset({"financial_planning"})
@@ -34,6 +37,7 @@ class AgentRouter:
         self,
         classifier_result: ClassifierResult,
         user: dict,
+        query: str = "",
     ) -> AgentResponse:
         agent = classifier_result.agent
         intent = classifier_result.intent
@@ -41,15 +45,15 @@ class AgentRouter:
 
         try:
             if agent in ORCHESTRATED:
-                return await self._orchestrator.run(classifier_result, user)
+                return await self._orchestrator.run(classifier_result, user, query=query)
 
             if agent in NEWS_INTENTS:
                 remapped = classifier_result.model_copy(update={"agent": "financial_news"})
-                return await self._orchestrator.run(remapped, user)
+                return await self._orchestrator.run(remapped, user, query=query)
 
             if agent in REPORT_INTENTS:
                 remapped = classifier_result.model_copy(update={"agent": "report_generator"})
-                return await self._orchestrator.run(remapped, user)
+                return await self._orchestrator.run(remapped, user, query=query)
 
             return await self._stub.run(agent, intent, entities)
         except Exception:
@@ -67,8 +71,9 @@ class AgentRouter:
         self,
         classifier_result: ClassifierResult,
         user: dict,
+        query: str = "",
     ) -> AgentResponse:
-        response = await self.route(classifier_result, user)
+        response = await self.route(classifier_result, user, query=query)
         if response.result is None and response.agent == "portfolio_health":
             if not (response.message or "").strip():
                 response = response.model_copy(

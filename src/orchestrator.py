@@ -89,7 +89,12 @@ class ValuraOrchestrator:
             )
         return self._meta_agent
 
-    async def run(self, classifier_result: ClassifierResult, user: dict) -> AgentResponse:
+    async def run(
+        self,
+        classifier_result: ClassifierResult,
+        user: dict,
+        query: str = "",
+    ) -> AgentResponse:
         self._ensure_team()
         self._ensure_meta_agent()
 
@@ -98,7 +103,7 @@ class ValuraOrchestrator:
         entities = classifier_result.entities
 
         if agent == "report_generator" or self._wants_report(intent):
-            payload = await self._run_report_ecosystem(entities, user, intent)
+            payload = await self._run_report_ecosystem(entities, user, intent, query)
             return self._build_agent_response(
                 "report_generator",
                 intent,
@@ -108,7 +113,7 @@ class ValuraOrchestrator:
             )
 
         if agent == "financial_news":
-            payload = await self._run_news_ecosystem(entities, user)
+            payload = await self._run_news_ecosystem(entities, user, intent, query)
             return self._build_agent_response(
                 "financial_news",
                 intent,
@@ -118,7 +123,7 @@ class ValuraOrchestrator:
             )
 
         if agent == "portfolio_health":
-            eco = await self._run_portfolio_ecosystem(user, entities)
+            eco = await self._run_portfolio_ecosystem(user, entities, intent, query)
             if eco.get("portfolio") is None:
                 return self._build_agent_response(
                     agent,
@@ -142,7 +147,7 @@ class ValuraOrchestrator:
 
         if agent == "market_research":
             tickers = list(entities.tickers or [])
-            eco = await self._run_market_research_ecosystem(tickers, intent, user)
+            eco = await self._run_market_research_ecosystem(tickers, intent, user, query)
             combined = self._synthesise_market_result(
                 eco.get("market"),
                 eco.get("news") or {},
@@ -157,7 +162,7 @@ class ValuraOrchestrator:
             )
 
         if agent == "risk_assessment":
-            eco = await self._run_risk_assessment_ecosystem(user, entities)
+            eco = await self._run_risk_assessment_ecosystem(user, entities, intent, query)
             combined = self._synthesise_risk_assessment_result(eco)
             return self._build_agent_response(
                 agent,
@@ -171,16 +176,21 @@ class ValuraOrchestrator:
 
     # --- ecosystems ---------------------------------------------------------
 
-    async def _run_portfolio_ecosystem(self, user: dict, entities: Entity) -> dict[str, Any]:
+    async def _run_portfolio_ecosystem(
+        self, user: dict, entities: Entity, intent: str = "", query: str = "",
+    ) -> dict[str, Any]:
         positions = user.get("positions") or []
         tickers = [str(p["ticker"]).upper() for p in positions if p.get("ticker")]
 
         portfolio_res, risk_res, news_res = await asyncio.gather(
-            self._safe_run("portfolio_health", self._portfolio.run(user)),
-            self._safe_run("risk_analysis", self._risk.run(user)),
+            self._safe_run("portfolio_health", self._portfolio.run(user, intent=intent, query=query)),
+            self._safe_run("risk_analysis", self._risk.run(user, intent=intent, query=query)),
             self._safe_run(
                 "news_agent",
-                self._news.run(tickers=tickers, topics=["portfolio", "market"], user=user),
+                self._news.run(
+                    tickers=tickers, topics=["portfolio", "market"], user=user,
+                    intent=intent, query=query,
+                ),
             ),
         )
 
@@ -190,34 +200,42 @@ class ValuraOrchestrator:
         return out
 
     async def _run_market_research_ecosystem(
-        self, tickers: list[str], intent: str, user: dict
+        self, tickers: list[str], intent: str, user: dict, query: str = "",
     ) -> dict[str, Any]:
         market_res, news_res = await asyncio.gather(
-            self._safe_run("market_research", self._market.run(tickers=tickers, intent=intent)),
+            self._safe_run(
+                "market_research",
+                self._market.run(tickers=tickers, intent=intent, query=query),
+            ),
             self._safe_run(
                 "news_agent",
-                self._news.run(tickers=tickers, topics=[], user=user),
+                self._news.run(
+                    tickers=tickers, topics=[], user=user, intent=intent, query=query,
+                ),
             ),
         )
         return {"market": market_res, "news": news_res}
 
-    async def _run_risk_ecosystem(self, user: dict) -> dict[str, Any]:
+    async def _run_risk_ecosystem(
+        self, user: dict, intent: str = "", query: str = "",
+    ) -> dict[str, Any]:
         positions = user.get("positions") or []
         tickers = [str(p["ticker"]).upper() for p in positions if p.get("ticker")]
         risk_res, news_res = await asyncio.gather(
-            self._safe_run("risk_analysis", self._risk.run(user)),
+            self._safe_run("risk_analysis", self._risk.run(user, intent=intent, query=query)),
             self._safe_run(
                 "news_agent",
                 self._news.run(
-                    tickers=tickers,
-                    topics=["market risk", "volatility"],
-                    user=user,
+                    tickers=tickers, topics=["market risk", "volatility"],
+                    user=user, intent=intent, query=query,
                 ),
             ),
         )
         return {"risk": risk_res, "news": news_res}
 
-    async def _run_risk_assessment_ecosystem(self, user: dict, entities: Entity) -> dict[str, Any]:
+    async def _run_risk_assessment_ecosystem(
+        self, user: dict, entities: Entity, intent: str = "", query: str = "",
+    ) -> dict[str, Any]:
         """Risk primary path plus ``portfolio_health`` (see ``PARALLEL_PAIRS``) and news."""
         positions = user.get("positions") or []
         tickers = list(entities.tickers or []) or [
@@ -225,40 +243,47 @@ class ValuraOrchestrator:
         ]
 
         portfolio_res, risk_res, news_res = await asyncio.gather(
-            self._safe_run("portfolio_health", self._portfolio.run(user)),
-            self._safe_run("risk_analysis", self._risk.run(user)),
+            self._safe_run("portfolio_health", self._portfolio.run(user, intent=intent, query=query)),
+            self._safe_run("risk_analysis", self._risk.run(user, intent=intent, query=query)),
             self._safe_run(
                 "news_agent",
                 self._news.run(
-                    tickers=tickers,
-                    topics=["market risk", "volatility"],
-                    user=user,
+                    tickers=tickers, topics=["market risk", "volatility"],
+                    user=user, intent=intent, query=query,
                 ),
             ),
         )
         return {"portfolio": portfolio_res, "risk": risk_res, "news": news_res}
 
-    async def _run_news_ecosystem(self, entities: Entity, user: dict) -> dict[str, Any]:
+    async def _run_news_ecosystem(
+        self, entities: Entity, user: dict, intent: str = "", query: str = "",
+    ) -> dict[str, Any]:
         tickers = list(entities.tickers or [])
         topics = list(entities.topics or []) or ["markets"]
         res = await self._safe_run(
             "news_agent",
-            self._news.run(tickers=tickers, topics=topics, user=user),
+            self._news.run(
+                tickers=tickers, topics=topics, user=user, intent=intent, query=query,
+            ),
         )
         return res or {}
 
-    async def _run_report_ecosystem(self, entities: Entity, user: dict, intent: str) -> dict[str, Any]:
-        report_type = self._infer_report_type(intent, entities)
+    async def _run_report_ecosystem(
+        self, entities: Entity, user: dict, intent: str, query: str = "",
+    ) -> dict[str, Any]:
+        report_type = self._infer_report_type(intent, entities, query)
         tickers = list(entities.tickers or [])
         fmt = "markdown"
 
         pre: dict[str, Any] = {}
         if report_type == "portfolio":
-            pre = await self._run_portfolio_ecosystem(user, entities)
+            pre = await self._run_portfolio_ecosystem(user, entities, intent, query)
         elif report_type == "market" and tickers:
-            pre = await self._run_market_research_ecosystem(tickers, intent, user)
+            pre = await self._run_market_research_ecosystem(tickers, intent, user, query)
         elif report_type == "risk":
-            pre = await self._run_risk_ecosystem(user)
+            pre = await self._run_risk_ecosystem(user, intent, query)
+        elif report_type == "comparison":
+            pre = await self._run_market_research_ecosystem(tickers, intent, user, query)
 
         report_payload = await self._safe_run(
             "report_generator",
@@ -485,10 +510,12 @@ class ValuraOrchestrator:
         low = (intent or "").lower()
         return "report" in low or "pdf" in low or "markdown export" in low
 
-    def _infer_report_type(self, intent: str, entities: Entity) -> str:
-        low = (intent or "").lower()
+    def _infer_report_type(self, intent: str, entities: Entity, query: str = "") -> str:
+        low = f"{(intent or '').lower()} {(query or '').lower()}"
         tickers = list(entities.tickers or [])
-        if "risk" in low or "var" in low:
+        if ("compar" in low or " vs " in f" {low} " or "versus" in low) and len(tickers) >= 2:
+            return "comparison"
+        if "risk" in low or "var" in low or "stress" in low:
             return "risk"
         if self._REPORT_MARKET_RX.search(low) or (tickers and "portfolio" not in low and "report" in low):
             return "market"

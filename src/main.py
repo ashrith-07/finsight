@@ -207,7 +207,9 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                 t_classify = time.monotonic() - t_classify_start
 
                 t_agent_start = time.monotonic()
-                agent_response = await router.route(classifier_result, request.user)
+                agent_response = await router.route(
+                    classifier_result, request.user, query=request.query
+                )
                 t_agent = time.monotonic() - t_agent_start
 
                 summary = _build_summary(agent_response)

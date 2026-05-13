@@ -64,10 +64,23 @@ class ReportGeneratorAgent:
             return await self.generate_market_report(tickers or [], format)
         if rt == "risk":
             return await self.generate_risk_report(user, format)
+        if rt in {"comparison", "compare", "comparison_report"}:
+            return await self.generate_comparison_report(tickers or [], format)
         return {
             "error": f"unknown report_type '{report_type}'",
-            "supported": ["portfolio", "market", "risk"],
+            "supported": ["portfolio", "market", "risk", "comparison"],
         }
+
+    @staticmethod
+    def detect_report_type(intent: str, query: str, tickers: list[str] | None) -> str:
+        text = f"{(intent or '').lower()} {(query or '').lower()}"
+        if "compar" in text or "vs" in text or " versus " in text:
+            return "comparison" if (tickers and len(tickers) >= 2) else "market"
+        if "risk" in text or "var" in text or "stress" in text:
+            return "risk"
+        if tickers and ("market" in text or "stock" in text):
+            return "market"
+        return "portfolio"
 
     # ---------- portfolio ----------
     async def generate_portfolio_report(self, user: dict, format: str) -> dict:
@@ -185,6 +198,100 @@ class ReportGeneratorAgent:
             news_flat[:20],
             format,
         )
+
+    # ---------- comparison ----------
+    async def generate_comparison_report(
+        self, tickers: list[str], format: str
+    ) -> dict:
+        """Side-by-side comparison report — price, fundamentals, risk, news per ticker."""
+        clean: list[str] = []
+        seen: set[str] = set()
+        for t in tickers or []:
+            s = str(t or "").strip().upper()
+            if s and s not in seen:
+                seen.add(s)
+                clean.append(s)
+
+        if len(clean) < 2:
+            return {
+                "format": format,
+                "error": "comparison report needs at least 2 tickers",
+                "supplied": clean,
+            }
+
+        # Pull everything we need in parallel.
+        snap_tasks = [asyncio.to_thread(self._yf.get_price_snapshot, t) for t in clean]
+        fund_tasks = [asyncio.to_thread(self._yf.get_company_fundamentals, t) for t in clean]
+        news_tasks = [
+            asyncio.to_thread(self._search.search_company_news, t, t, 7) for t in clean
+        ]
+        snapshots, fundamentals, news_lists = await asyncio.gather(
+            asyncio.gather(*snap_tasks, return_exceptions=True),
+            asyncio.gather(*fund_tasks, return_exceptions=True),
+            asyncio.gather(*news_tasks, return_exceptions=True),
+        )
+
+        snaps = [s if isinstance(s, dict) and not s.get("error") else {"ticker": clean[i]}
+                 for i, s in enumerate(snapshots)]
+        funds = [f if isinstance(f, dict) and not f.get("error") else {"ticker": clean[i]}
+                 for i, f in enumerate(fundamentals)]
+
+        # News sentiment counts per ticker for the "News Sentiment Comparison" section.
+        from src.agents.news_agent import FinancialNewsAgent
+        scorer = FinancialNewsAgent(self._llm)
+        news_summary = []
+        for ticker, items in zip(clean, news_lists):
+            articles = items if isinstance(items, list) else []
+            counts = {"positive": 0, "negative": 0, "neutral": 0}
+            top_title = None
+            for it in articles:
+                if not isinstance(it, dict):
+                    continue
+                sent = scorer._score_sentiment(it.get("title", ""))
+                counts[sent] = counts.get(sent, 0) + 1
+                if top_title is None and it.get("title"):
+                    top_title = it["title"]
+            news_summary.append({
+                "ticker": ticker,
+                "article_count": sum(counts.values()),
+                **counts,
+                "top_headline": top_title,
+            })
+
+        return await asyncio.to_thread(
+            self._report.generate_market_report,
+            clean,
+            snaps,
+            self._build_comparison_payload(clean, snaps, funds, news_summary),
+            format,
+        )
+
+    def _build_comparison_payload(
+        self,
+        tickers: list[str],
+        snapshots: list[dict],
+        fundamentals: list[dict],
+        news_summary: list[dict],
+    ) -> list[dict]:
+        """Pack comparison rows into the news-list slot so the existing market-report
+        renderer surfaces them as headline-style bullets."""
+        rows: list[dict] = []
+        for t, s, f, n in zip(tickers, snapshots, fundamentals, news_summary):
+            price = s.get("current_price")
+            day = s.get("day_change_pct")
+            pe = f.get("pe_ratio")
+            margin = f.get("profit_margin")
+            de = f.get("debt_to_equity")
+            rows.append({
+                "title": (
+                    f"{t} — price {price}, day {day}%, P/E {pe}, "
+                    f"margin {margin}, D/E {de}, articles {n['article_count']} "
+                    f"(pos {n['positive']}/neu {n['neutral']}/neg {n['negative']})"
+                ),
+                "url": "",
+                "published_date": "",
+            })
+        return rows
 
     # ---------- risk ----------
     async def generate_risk_report(self, user: dict, format: str) -> dict:

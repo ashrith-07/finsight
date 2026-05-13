@@ -79,7 +79,11 @@ class Observation(BaseModel):
 
 
 class PortfolioHealthResult(BaseModel):
-    """``build_guidance`` is set only for zero-position (BUILD) flows."""
+    """``build_guidance`` is set only for zero-position (BUILD) flows.
+
+    ``sub_intent`` and ``extras`` carry sub-intent-specific results
+    (e.g. tax-loss replacement candidates, sector concentration breakdowns).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -89,6 +93,8 @@ class PortfolioHealthResult(BaseModel):
     observations: list[Observation]
     disclaimer: str
     build_guidance: str | None = None
+    sub_intent: str | None = None
+    extras: dict | None = None
 
 
 class PriceSnapshot(BaseModel):
@@ -120,6 +126,9 @@ class CompanyInfo(BaseModel):
 
 
 class MarketResearchResult(BaseModel):
+    """``sub_intent`` + ``extras`` carry focused payloads (fundamentals,
+    technical levels, options, etc.) for narrow sub-intents."""
+
     model_config = ConfigDict(extra="forbid")
 
     tickers: list[str]
@@ -128,6 +137,8 @@ class MarketResearchResult(BaseModel):
     observations: list[Observation]
     comparison_note: str | None = None
     disclaimer: str
+    sub_intent: str | None = None
+    extras: dict | None = None
 
 
 class AgentResponse(BaseModel):

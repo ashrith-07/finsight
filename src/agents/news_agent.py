@@ -1,4 +1,8 @@
-"""Financial news aggregator: parallel DDG/yfinance fetch, keyword sentiment, LLM digest."""
+"""Financial news aggregator: parallel DDG/yfinance fetch, keyword sentiment, LLM digest.
+
+Sub-intent routing inside ``run`` selects ticker / market / sector / economic-calendar /
+sentiment-summary flows.
+"""
 
 from __future__ import annotations
 
@@ -58,6 +62,39 @@ def _tokenise(text: str) -> list[str]:
     return re.findall(r"[A-Za-z0-9']+", str(text or "").lower())
 
 
+_NEWS_SUB_INTENT_RULES: list[tuple[str, re.Pattern[str]]] = [
+    ("economic_events", re.compile(
+        r"\b(fed\b|fomc|cpi|inflation\s+data|jobs?\s+report|payrolls?|"
+        r"economic\s+(calendar|events)|earnings\s+(calendar|this\s+week|season)|rate\s+decision)\b", re.I)),
+    ("sentiment_summary", re.compile(
+        r"\b(sentiment|bullish|bearish|mood|how\s+is\s+the\s+market\s+feeling)\b", re.I)),
+    ("sector_news", re.compile(
+        r"\b(sector|industry|tech\s+(stocks|sector)|healthcare|energy|finance|"
+        r"financials|consumer\s+(staples|discretionary)|industrials)\b", re.I)),
+    ("market_news", re.compile(
+        r"\b(market(s)?\s+(today|news|update)|broad\s+market|overall\s+market)\b", re.I)),
+]
+
+_DEFAULT_SECTORS = ["Technology", "Healthcare", "Financials", "Energy", "Consumer"]
+
+
+def _impact_for(label: str) -> str:
+    return {
+        "fed_meeting": "high — affects rates, equities, and bonds",
+        "earnings": "medium — name-specific moves",
+        "macro_data": "high — affects rate-cut expectations",
+        "jobs": "high — labour-market read",
+    }.get(label, "medium")
+
+
+def _detect_sub_intent(intent: str, query: str, ticker_count: int) -> str:
+    text = f"{intent or ''} {query or ''}"
+    for label, rx in _NEWS_SUB_INTENT_RULES:
+        if rx.search(text):
+            return label
+    return "ticker_news" if ticker_count > 0 else "market_news"
+
+
 class FinancialNewsAgent:
     """Pulls company + market news, scores headlines, returns a deduplicated, summarised digest."""
 
@@ -85,39 +122,58 @@ class FinancialNewsAgent:
                 raise
         return self._agno
 
+    @staticmethod
+    def _detect_sub_intent(intent: str, query: str, ticker_count: int) -> str:
+        return _detect_sub_intent(intent, query, ticker_count)
+
     # ---------- main pipeline ----------
     async def run(
         self,
         tickers: list[str],
         topics: list[str],
         user: dict,
+        intent: str = "",
+        query: str = "",
     ) -> dict:
         clean_tickers = self._normalise_tickers(tickers)
         clean_topics = [t.strip() for t in (topics or []) if str(t or "").strip()]
+        sub = self._detect_sub_intent(intent, query, len(clean_tickers))
 
-        # Fetch company names in parallel so company_news searches are richer.
+        if sub == "sector_news":
+            sectors = clean_topics or _DEFAULT_SECTORS
+            payload = await self._sector_news(sectors)
+            payload["user_context"] = {
+                "name": user.get("name"), "risk_profile": user.get("risk_profile"),
+            }
+            return payload
+
+        if sub == "economic_events":
+            payload = await self._economic_calendar()
+            payload["user_context"] = {
+                "name": user.get("name"), "risk_profile": user.get("risk_profile"),
+            }
+            return payload
+
+        if sub == "sentiment_summary":
+            payload = await self._sentiment_summary(clean_tickers, clean_topics, user)
+            return payload
+
+        # market_news / ticker_news both use the full pipeline.
         names_map = await self._fetch_names(clean_tickers)
-
         articles = await self._fetch_all_news_parallel(
             clean_tickers, clean_topics, names_map
         )
-
-        scored = []
-        for art in articles:
-            sentiment = self._score_sentiment(art.get("title", ""))
-            scored.append({**art, "sentiment": sentiment})
-
+        scored = [{**a, "sentiment": self._score_sentiment(a.get("title", ""))} for a in articles]
         deduped = self._deduplicate(scored)
-
         summary = await self._generate_summary(deduped, clean_tickers)
 
         sentiment_counts = {"positive": 0, "negative": 0, "neutral": 0}
         for a in deduped:
-            sentiment_counts[a.get("sentiment", "neutral")] = (
-                sentiment_counts.get(a.get("sentiment", "neutral"), 0) + 1
-            )
+            key = a.get("sentiment", "neutral")
+            sentiment_counts[key] = sentiment_counts.get(key, 0) + 1
 
         return {
+            "sub_intent": sub,
             "tickers": clean_tickers,
             "topics": clean_topics,
             "articles": deduped[:20],
@@ -127,6 +183,135 @@ class FinancialNewsAgent:
             "user_context": {
                 "name": user.get("name"),
                 "risk_profile": user.get("risk_profile"),
+            },
+        }
+
+    # ---------- sub-intents ----------
+    async def _sector_news(self, sectors: list[str]) -> dict:
+        """Top 3 articles per sector with sentiment, all sectors in parallel."""
+        async def fetch_one(sector: str) -> tuple[str, list[dict]]:
+            try:
+                items = await asyncio.to_thread(
+                    self._search.search_financial_news, f"{sector} sector stocks", 5
+                )
+            except Exception as e:
+                logger.warning("sector_news fetch failed for %s: %s", sector, e)
+                items = []
+            scored = [
+                {**it, "sentiment": self._score_sentiment(it.get("title", ""))}
+                for it in (items or [])
+                if isinstance(it, dict)
+            ]
+            return sector, scored[:3]
+
+        results = await asyncio.gather(*(fetch_one(s) for s in sectors))
+        by_sector = {sector: items for sector, items in results}
+        all_articles: list[dict] = []
+        for sector, items in by_sector.items():
+            for it in items:
+                all_articles.append({**it, "sector": sector})
+        deduped = self._deduplicate(all_articles)
+
+        sentiment_counts = {"positive": 0, "negative": 0, "neutral": 0}
+        for a in deduped:
+            sentiment_counts[a.get("sentiment", "neutral")] = sentiment_counts.get(
+                a.get("sentiment", "neutral"), 0
+            ) + 1
+
+        return {
+            "sub_intent": "sector_news",
+            "tickers": [],
+            "topics": sectors,
+            "articles": deduped[:20],
+            "sentiment_counts": sentiment_counts,
+            "summary": (
+                f"Pulled {len(deduped)} articles across {len(sectors)} sector(s). "
+                f"Top sectors covered: {', '.join(sectors[:3])}."
+            ),
+            "total_results": len(deduped),
+            "by_sector": {s: items for s, items in by_sector.items()},
+        }
+
+    async def _economic_calendar(self) -> dict:
+        """Aggregate Fed / earnings / macro data releases via web_search MCP."""
+        queries = [
+            ("fed_meeting", "next FOMC fed meeting decision rate"),
+            ("earnings", "earnings calendar this week major companies"),
+            ("macro_data", "upcoming CPI inflation data release"),
+            ("jobs", "jobs report nonfarm payrolls release date"),
+        ]
+
+        async def one(label: str, q: str) -> tuple[str, list[dict]]:
+            try:
+                items = await asyncio.to_thread(self._search.search_financial_news, q, 4)
+            except Exception as e:
+                logger.warning("economic_calendar fetch failed for %s: %s", label, e)
+                items = []
+            return label, [it for it in (items or []) if isinstance(it, dict)][:3]
+
+        results = await asyncio.gather(*(one(label, q) for label, q in queries))
+        events = {label: items for label, items in results}
+        flat: list[dict] = []
+        for label, items in events.items():
+            for it in items:
+                flat.append({**it, "category": label, "expected_impact": _impact_for(label)})
+        deduped = self._deduplicate(flat)
+
+        return {
+            "sub_intent": "economic_events",
+            "tickers": [],
+            "topics": ["economic calendar"],
+            "articles": deduped[:20],
+            "sentiment_counts": {"positive": 0, "negative": 0, "neutral": len(deduped)},
+            "summary": (
+                f"{len(deduped)} upcoming-events articles across Fed, earnings, "
+                f"and macro data feeds."
+            ),
+            "total_results": len(deduped),
+            "events_by_category": events,
+        }
+
+    async def _sentiment_summary(
+        self, tickers: list[str], topics: list[str], user: dict,
+    ) -> dict:
+        """Aggregate sentiment across all news for given tickers."""
+        names_map = await self._fetch_names(tickers)
+        articles = await self._fetch_all_news_parallel(tickers, topics, names_map)
+        scored = [{**a, "sentiment": self._score_sentiment(a.get("title", ""))} for a in articles]
+        deduped = self._deduplicate(scored)
+
+        pos = [a for a in deduped if a.get("sentiment") == "positive"]
+        neg = [a for a in deduped if a.get("sentiment") == "negative"]
+        neu = [a for a in deduped if a.get("sentiment") == "neutral"]
+
+        total = max(len(deduped), 1)
+        sentiment_score = (len(pos) - len(neg)) / total
+        if sentiment_score > 0.2:
+            overall = "bullish"
+        elif sentiment_score < -0.2:
+            overall = "bearish"
+        else:
+            overall = "neutral"
+
+        return {
+            "sub_intent": "sentiment_summary",
+            "tickers": tickers,
+            "topics": topics,
+            "overall_sentiment": overall,
+            "sentiment_score": round(sentiment_score, 3),
+            "sentiment_counts": {
+                "positive": len(pos), "negative": len(neg), "neutral": len(neu),
+            },
+            "top_positive_headline": pos[0]["title"] if pos else None,
+            "top_negative_headline": neg[0]["title"] if neg else None,
+            "articles": deduped[:10],
+            "summary": (
+                f"Aggregate sentiment is {overall} (score {sentiment_score:+.2f}) across "
+                f"{len(deduped)} headlines."
+            ),
+            "total_results": len(deduped),
+            "user_context": {
+                "name": user.get("name"), "risk_profile": user.get("risk_profile"),
             },
         }
 
@@ -295,5 +480,9 @@ async def run(
     topics: list[str],
     user: dict,
     llm: LLMClient,
+    intent: str = "",
+    query: str = "",
 ) -> dict:
-    return await FinancialNewsAgent(llm).run(tickers, topics, user)
+    return await FinancialNewsAgent(llm).run(
+        tickers, topics, user, intent=intent, query=query
+    )

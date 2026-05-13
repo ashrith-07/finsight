@@ -1,10 +1,16 @@
-"""Portfolio analytics via yfinance plus one LLM pass for observations."""
+"""Portfolio analytics via yfinance plus one LLM pass for observations.
+
+Sub-intent routing inside ``run`` selects a focused pipeline
+(concentration / performance / benchmark / rebalance / tax-loss)
+or the default full health check.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -33,9 +39,68 @@ DISCLAIMER = (
 
 DEFAULT_BENCHMARK_RETURN_PCT = 14.2
 
+# Sub-intent ordering matters: more specific phrasings checked first.
+_SUB_INTENT_RULES: list[tuple[str, re.Pattern[str]]] = [
+    # `\w*` after partial roots (e.g. ``rebalanc``) captures every inflection
+    # ("rebalance", "rebalancing", …) without listing them all.
+    ("tax_loss_harvesting", re.compile(
+        r"\b(tax[\s-]?loss|tax[\s-]?harvest\w*|harvest\w*\s+losses|"
+        r"tax\s+saving|capital\s+loss|wash\s+sale)\b", re.I)),
+    ("rebalance_suggestion", re.compile(
+        r"\b(rebalanc\w*|reallocat\w*|target\s+(weight|allocation)|"
+        r"asset\s+allocation|drift|trim)\b", re.I)),
+    ("benchmark_comparison", re.compile(
+        r"\b(benchmark\w*|beating\s+(the\s+)?market|s&p|sp[\s-]?500|qqq|nasdaq|"
+        r"index\s+fund|outperform\w*|underperform\w*|alpha)\b", re.I)),
+    ("concentration_only", re.compile(
+        r"\b(diversif\w*|concentrat\w*|exposure\s+to\s+one|"
+        r"single[\s-]?(stock|holding)|top\s+holding|sector\s+concentration|"
+        r"too\s+much\s+in)\b", re.I)),
+    ("performance_only", re.compile(
+        r"\b(return\w*|performance|gain\w*|loss\w*|p&l|"
+        r"profit\w*|how\s+much\s+(have|did)\s+i\s+(make|earn|gain|lose))\b", re.I)),
+]
+
+
+_REBALANCE_TARGETS: dict[str, dict[str, float]] = {
+    "aggressive":   {"equity": 0.90, "bonds": 0.10},
+    "moderate":     {"equity": 0.70, "bonds": 0.30},
+    "conservative": {"equity": 0.50, "bonds": 0.50},
+}
+
+
+# yfinance tickers that we treat as bonds for the equity-vs-bonds split.
+_BOND_TICKERS = frozenset({"BND", "AGG", "TLT", "IEF", "SHY", "VGIT", "VGSH", "VGLT", "BNDW", "GOVT"})
+
+# Rough sector-equivalent ETFs to suggest as wash-sale-safe replacements.
+_SECTOR_REPLACEMENT_ETFS: dict[str, str] = {
+    "Technology": "QQQ",
+    "Communication Services": "VOX",
+    "Healthcare": "XLV",
+    "Financial Services": "XLF",
+    "Consumer Cyclical": "XLY",
+    "Consumer Defensive": "XLP",
+    "Energy": "XLE",
+    "Industrials": "XLI",
+    "Real Estate": "VNQ",
+    "Utilities": "XLU",
+    "Basic Materials": "XLB",
+}
+
 
 class _ObservationList(BaseModel):
     observations: list[Observation]
+
+
+def _detect_sub_intent(intent: str, query: str) -> str:
+    """Pick a focused mode by keyword-matching against intent + raw query.
+    Defaults to ``full_health_check`` when nothing distinctive matches.
+    """
+    text = f"{intent or ''} {query or ''}"
+    for label, rx in _SUB_INTENT_RULES:
+        if rx.search(text):
+            return label
+    return "full_health_check"
 
 
 @dataclass
@@ -563,7 +628,33 @@ class PortfolioHealthAgent:
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
 
-    async def run(self, user: dict) -> PortfolioHealthResult:
+    @staticmethod
+    def _detect_sub_intent(intent: str, query: str) -> str:
+        return _detect_sub_intent(intent, query)
+
+    async def run(
+        self,
+        user: dict,
+        intent: str = "",
+        query: str = "",
+    ) -> PortfolioHealthResult:
+        """Sub-intent dispatcher. ``intent``/``query`` default to '' so legacy callers
+        (and tests) keep getting the full health check."""
+        sub = self._detect_sub_intent(intent, query)
+        if sub == "concentration_only":
+            return await self._concentration_analysis(user)
+        if sub == "performance_only":
+            return await self._performance_analysis(user)
+        if sub == "benchmark_comparison":
+            return await self._benchmark_comparison(user)
+        if sub == "rebalance_suggestion":
+            return await self._rebalance_suggestion(user)
+        if sub == "tax_loss_harvesting":
+            return await self._tax_loss_harvesting(user)
+        return await self._full_health_check(user)
+
+    # -------------------- default: full health check --------------------
+    async def _full_health_check(self, user: dict) -> PortfolioHealthResult:
         try:
             profile = _parse_profile(user)
             if not profile.positions:
@@ -579,12 +670,7 @@ class PortfolioHealthAgent:
                 cur = str(pos.get("currency") or "USD").upper()
                 px_loc = float(prices_local.get(ticker, float(pos.get("avg_cost") or 0.0)))
                 current_usd = qty * _close_usd_for_currency(px_loc, cur, fx)
-                positions_with_values.append(
-                    {
-                        **pos,
-                        "current_value": current_usd,
-                    }
-                )
+                positions_with_values.append({**pos, "current_value": current_usd})
 
             concentration = _compute_concentration(positions_with_values)
             performance, oldest = _compute_performance(profile.positions, prices_local, fx)
@@ -595,11 +681,7 @@ class PortfolioHealthAgent:
             )
 
             observations = await _generate_observations(
-                user,
-                concentration,
-                performance,
-                benchmark,
-                self._llm,
+                user, concentration, performance, benchmark, self._llm,
             )
 
             for w in price_warnings[:3]:
@@ -617,15 +699,15 @@ class PortfolioHealthAgent:
                     ),
                 )
 
-            observations = observations[:8]
-
             return PortfolioHealthResult(
                 concentration_risk=concentration,
                 performance=performance,
                 benchmark_comparison=benchmark,
-                observations=observations,
+                observations=observations[:8],
                 disclaimer=DISCLAIMER,
                 build_guidance=None,
+                sub_intent="full_health_check",
+                extras=None,
             )
         except Exception:
             logger.exception("PortfolioHealthAgent.run failed; returning minimal safe result")
@@ -648,8 +730,432 @@ class PortfolioHealthAgent:
                 observations=_default_observations(),
                 disclaimer=DISCLAIMER,
                 build_guidance=None,
+                sub_intent="full_health_check",
+                extras=None,
             )
 
+    # -------------------- sub-intents --------------------
+    async def _priced_positions(
+        self, user: dict
+    ) -> tuple[list[dict[str, Any]], dict[str, float], dict[str, float], list[str]]:
+        """Common prep: live prices + FX + per-position USD values + warnings."""
+        profile = _parse_profile(user)
+        fx = await _snapshot_fx_to_usd()
+        prices_local, warnings = await _fetch_prices(profile.positions)
 
-async def run(user: dict, llm: LLMClient) -> PortfolioHealthResult:
-    return await PortfolioHealthAgent(llm).run(user)
+        rows: list[dict[str, Any]] = []
+        for pos in profile.positions:
+            ticker = str(pos.get("ticker") or "").upper()
+            qty = float(pos.get("quantity") or 0.0)
+            cur = str(pos.get("currency") or "USD").upper()
+            avg_cost = float(pos.get("avg_cost") or 0.0)
+            px_loc = float(prices_local.get(ticker, avg_cost))
+            current_usd = qty * _close_usd_for_currency(px_loc, cur, fx)
+            cost_usd = qty * _close_usd_for_currency(avg_cost, cur, fx)
+            rows.append({
+                **pos,
+                "ticker": ticker,
+                "current_price_local": px_loc,
+                "current_value": current_usd,
+                "cost_basis_usd": cost_usd,
+                "unrealised_pnl_usd": current_usd - cost_usd,
+                "unrealised_pnl_pct": ((px_loc / avg_cost - 1.0) * 100.0) if avg_cost > 0 else 0.0,
+            })
+        return rows, prices_local, fx, warnings
+
+    async def _concentration_analysis(self, user: dict) -> PortfolioHealthResult:
+        """Top-position + sector breakdown using live yfinance sector lookups."""
+        rows, prices_local, fx, warnings = await self._priced_positions(user)
+        if not rows:
+            return build_guidance_response(user)
+
+        concentration = _compute_concentration(rows)
+        total = sum(r["current_value"] for r in rows) or 1.0
+
+        # Sector lookup in parallel — graceful failure to "Unknown".
+        async def sector_for(ticker: str) -> str:
+            def _blocking() -> str:
+                try:
+                    info = yf.Ticker(ticker).info or {}
+                    return str(info.get("sector") or "Unknown")
+                except Exception:
+                    return "Unknown"
+            return await asyncio.to_thread(_blocking)
+
+        sectors_list = await asyncio.gather(*(sector_for(r["ticker"]) for r in rows))
+        sector_weights: dict[str, float] = {}
+        for r, sector in zip(rows, sectors_list):
+            sector_weights[sector] = sector_weights.get(sector, 0.0) + (r["current_value"] / total * 100.0)
+
+        sector_breakdown = sorted(
+            [{"sector": s, "weight_pct": round(w, 2)} for s, w in sector_weights.items()],
+            key=lambda x: x["weight_pct"],
+            reverse=True,
+        )
+        top_sector = sector_breakdown[0] if sector_breakdown else {"sector": "Unknown", "weight_pct": 0.0}
+
+        per_position = sorted(
+            [{"ticker": r["ticker"], "weight_pct": round(r["current_value"] / total * 100.0, 2)} for r in rows],
+            key=lambda x: x["weight_pct"],
+            reverse=True,
+        )
+
+        observations: list[Observation] = []
+        for w in warnings[:2]:
+            observations.append(Observation(severity="warning", text=w))
+        if concentration.top_position_pct > 40:
+            observations.append(Observation(
+                severity="warning",
+                text=(
+                    f"Top holding is {concentration.top_position_pct:.1f}% of book — "
+                    f"well above the 40% single-stock concentration threshold."
+                ),
+            ))
+        if top_sector["weight_pct"] > 50:
+            observations.append(Observation(
+                severity="warning",
+                text=(
+                    f"Sector concentration is high: {top_sector['weight_pct']:.1f}% sits in "
+                    f"{top_sector['sector']} alone."
+                ),
+            ))
+        if not observations:
+            observations.append(Observation(
+                severity="info",
+                text=(
+                    f"Diversification looks balanced — top holding {concentration.top_position_pct:.1f}% "
+                    f"and largest sector ({top_sector['sector']}) at {top_sector['weight_pct']:.1f}%."
+                ),
+            ))
+
+        return PortfolioHealthResult(
+            concentration_risk=concentration,
+            performance=Performance(
+                total_return_pct=0.0, annualized_return_pct=0.0,
+                cost_basis_total=0.0, current_value_total=round(total, 2),
+            ),
+            benchmark_comparison=BenchmarkComparison(
+                benchmark=_benchmark_preference(_parse_profile(user).preferences),
+                portfolio_return_pct=0.0, benchmark_return_pct=0.0, alpha_pct=0.0,
+            ),
+            observations=observations[:5],
+            disclaimer=DISCLAIMER,
+            build_guidance=None,
+            sub_intent="concentration_only",
+            extras={
+                "sector_breakdown": sector_breakdown,
+                "per_position_weights": per_position,
+                "top_sector": top_sector,
+            },
+        )
+
+    async def _performance_analysis(self, user: dict) -> PortfolioHealthResult:
+        """Total return + best/worst performers + unrealised P&L split."""
+        rows, prices_local, fx, warnings = await self._priced_positions(user)
+        if not rows:
+            return build_guidance_response(user)
+
+        profile = _parse_profile(user)
+        performance, _oldest = _compute_performance(profile.positions, prices_local, fx)
+
+        ranked = sorted(rows, key=lambda r: r["unrealised_pnl_pct"], reverse=True)
+        best = ranked[0] if ranked else None
+        worst = ranked[-1] if ranked else None
+        unrealised_gains = round(sum(r["unrealised_pnl_usd"] for r in rows if r["unrealised_pnl_usd"] > 0), 2)
+        unrealised_losses = round(sum(r["unrealised_pnl_usd"] for r in rows if r["unrealised_pnl_usd"] < 0), 2)
+
+        observations: list[Observation] = []
+        for w in warnings[:2]:
+            observations.append(Observation(severity="warning", text=w))
+        observations.append(Observation(
+            severity="info",
+            text=(
+                f"Portfolio total return is {performance.total_return_pct:+.2f}% "
+                f"(annualised {performance.annualized_return_pct:+.2f}%)."
+            ),
+        ))
+        if best and worst and best["ticker"] != worst["ticker"]:
+            observations.append(Observation(
+                severity="info",
+                text=(
+                    f"Best performer: {best['ticker']} {best['unrealised_pnl_pct']:+.2f}%. "
+                    f"Worst performer: {worst['ticker']} {worst['unrealised_pnl_pct']:+.2f}%."
+                ),
+            ))
+
+        return PortfolioHealthResult(
+            concentration_risk=_compute_concentration(rows),
+            performance=performance,
+            benchmark_comparison=BenchmarkComparison(
+                benchmark=_benchmark_preference(profile.preferences),
+                portfolio_return_pct=performance.total_return_pct,
+                benchmark_return_pct=0.0, alpha_pct=0.0,
+            ),
+            observations=observations[:5],
+            disclaimer=DISCLAIMER,
+            build_guidance=None,
+            sub_intent="performance_only",
+            extras={
+                "best_position": (
+                    {"ticker": best["ticker"], "pnl_pct": round(best["unrealised_pnl_pct"], 2),
+                     "pnl_usd": round(best["unrealised_pnl_usd"], 2)} if best else None
+                ),
+                "worst_position": (
+                    {"ticker": worst["ticker"], "pnl_pct": round(worst["unrealised_pnl_pct"], 2),
+                     "pnl_usd": round(worst["unrealised_pnl_usd"], 2)} if worst else None
+                ),
+                "unrealised_gains_usd": unrealised_gains,
+                "unrealised_losses_usd": unrealised_losses,
+                "ranked_positions": [
+                    {"ticker": r["ticker"], "pnl_pct": round(r["unrealised_pnl_pct"], 2),
+                     "pnl_usd": round(r["unrealised_pnl_usd"], 2)}
+                    for r in ranked
+                ],
+            },
+        )
+
+    async def _benchmark_comparison(self, user: dict) -> PortfolioHealthResult:
+        """Side-by-side vs SPY, QQQ, and the user's preferred benchmark."""
+        rows, prices_local, fx, warnings = await self._priced_positions(user)
+        if not rows:
+            return build_guidance_response(user)
+
+        profile = _parse_profile(user)
+        performance, oldest = _compute_performance(profile.positions, prices_local, fx)
+        preferred = _benchmark_preference(profile.preferences)
+
+        # Always compare against the standard pair plus whatever the user prefers.
+        targets = [("S&P 500", "SPY"), ("QQQ", "QQQ"), (preferred, _benchmark_ticker(preferred))]
+        # Dedup by symbol while preserving order.
+        seen: set[str] = set()
+        targets = [(n, s) for n, s in targets if not (s in seen or seen.add(s))]
+
+        end = datetime.now(timezone.utc)
+        start = oldest or end
+        results = await asyncio.gather(*(
+            asyncio.to_thread(_period_return_pct, sym, start, end) for _, sym in targets
+        ))
+
+        comparisons = []
+        for (name, sym), bench_pct in zip(targets, results):
+            rate = bench_pct if bench_pct is not None else DEFAULT_BENCHMARK_RETURN_PCT
+            comparisons.append({
+                "name": name,
+                "symbol": sym,
+                "benchmark_return_pct": round(float(rate), 2),
+                "portfolio_return_pct": round(performance.total_return_pct, 2),
+                "alpha_pct": round(performance.total_return_pct - float(rate), 2),
+                "live_data": bench_pct is not None,
+            })
+
+        observations: list[Observation] = []
+        for w in warnings[:2]:
+            observations.append(Observation(severity="warning", text=w))
+        for c in comparisons:
+            sev = "info" if c["alpha_pct"] >= 0 else "warning"
+            tag = "ahead of" if c["alpha_pct"] >= 0 else "behind"
+            observations.append(Observation(
+                severity=sev,
+                text=(
+                    f"{tag} {c['name']} by {abs(c['alpha_pct']):.2f}% "
+                    f"(portfolio {c['portfolio_return_pct']:+.2f}% vs {c['benchmark_return_pct']:+.2f}%)."
+                ),
+            ))
+
+        primary = comparisons[0]
+        return PortfolioHealthResult(
+            concentration_risk=_compute_concentration(rows),
+            performance=performance,
+            benchmark_comparison=BenchmarkComparison(
+                benchmark=primary["name"],
+                portfolio_return_pct=primary["portfolio_return_pct"],
+                benchmark_return_pct=primary["benchmark_return_pct"],
+                alpha_pct=primary["alpha_pct"],
+            ),
+            observations=observations[:6],
+            disclaimer=DISCLAIMER,
+            build_guidance=None,
+            sub_intent="benchmark_comparison",
+            extras={"comparisons": comparisons},
+        )
+
+    async def _rebalance_suggestion(self, user: dict) -> PortfolioHealthResult:
+        """Equity-vs-bonds drift relative to risk-profile target + suggested trades."""
+        rows, _prices, _fx, warnings = await self._priced_positions(user)
+        if not rows:
+            return build_guidance_response(user)
+
+        profile = _parse_profile(user)
+        target = _REBALANCE_TARGETS.get(profile.risk_profile, _REBALANCE_TARGETS["moderate"])
+        total = sum(r["current_value"] for r in rows) or 1.0
+
+        bonds_value = sum(r["current_value"] for r in rows if r["ticker"] in _BOND_TICKERS)
+        equity_value = total - bonds_value
+        current_split = {
+            "equity": round(equity_value / total, 4),
+            "bonds": round(bonds_value / total, 4),
+        }
+        drift = {k: round(current_split[k] - target[k], 4) for k in ("equity", "bonds")}
+
+        # Translate drift into dollar trades: positive bond drift = need to BUY bonds.
+        trade_amount_usd = round(abs(drift["equity"]) * total, 2)
+        action = "trim equity, add bonds" if drift["equity"] > 0 else "add equity, trim bonds"
+        rebalance_trades = [
+            {
+                "action": "sell" if drift["equity"] > 0 else "buy",
+                "asset_class": "equity",
+                "amount_usd": trade_amount_usd,
+            },
+            {
+                "action": "buy" if drift["equity"] > 0 else "sell",
+                "asset_class": "bonds",
+                "amount_usd": trade_amount_usd,
+            },
+        ] if abs(drift["equity"]) > 0.05 else []  # 5pp tolerance band
+
+        observations: list[Observation] = []
+        for w in warnings[:2]:
+            observations.append(Observation(severity="warning", text=w))
+        observations.append(Observation(
+            severity="info",
+            text=(
+                f"{profile.risk_profile.title()} target: "
+                f"{int(target['equity']*100)}% equity / {int(target['bonds']*100)}% bonds. "
+                f"Current: {int(current_split['equity']*100)}% / {int(current_split['bonds']*100)}%."
+            ),
+        ))
+        if rebalance_trades:
+            observations.append(Observation(
+                severity="warning",
+                text=(
+                    f"Drift exceeds 5pp — to realign {action} by approximately "
+                    f"${trade_amount_usd:,.0f}."
+                ),
+            ))
+        else:
+            observations.append(Observation(
+                severity="info",
+                text="Allocation drift is within the 5pp tolerance band — no rebalance needed.",
+            ))
+
+        return PortfolioHealthResult(
+            concentration_risk=_compute_concentration(rows),
+            performance=Performance(
+                total_return_pct=0.0, annualized_return_pct=0.0,
+                cost_basis_total=0.0, current_value_total=round(total, 2),
+            ),
+            benchmark_comparison=BenchmarkComparison(
+                benchmark=_benchmark_preference(profile.preferences),
+                portfolio_return_pct=0.0, benchmark_return_pct=0.0, alpha_pct=0.0,
+            ),
+            observations=observations[:5],
+            disclaimer=DISCLAIMER,
+            build_guidance=None,
+            sub_intent="rebalance_suggestion",
+            extras={
+                "risk_profile": profile.risk_profile,
+                "target_allocation": target,
+                "current_allocation": current_split,
+                "drift": drift,
+                "rebalance_trades": rebalance_trades,
+            },
+        )
+
+    async def _tax_loss_harvesting(self, user: dict) -> PortfolioHealthResult:
+        """Identify losers + estimate 30% tax saving + suggest sector-equivalent ETF replacements."""
+        rows, _prices, _fx, warnings = await self._priced_positions(user)
+        if not rows:
+            return build_guidance_response(user)
+
+        TAX_RATE = 0.30
+        losers = [r for r in rows if r["unrealised_pnl_usd"] < 0]
+        losers.sort(key=lambda r: r["unrealised_pnl_usd"])
+
+        # Sector lookup in parallel → ETF replacement candidate per loser.
+        async def sector_for(ticker: str) -> str:
+            def _blocking() -> str:
+                try:
+                    info = yf.Ticker(ticker).info or {}
+                    return str(info.get("sector") or "Unknown")
+                except Exception:
+                    return "Unknown"
+            return await asyncio.to_thread(_blocking)
+
+        sectors = await asyncio.gather(*(sector_for(r["ticker"]) for r in losers))
+        candidates = []
+        total_loss = 0.0
+        for r, sector in zip(losers, sectors):
+            loss_usd = r["unrealised_pnl_usd"]
+            total_loss += loss_usd
+            candidates.append({
+                "ticker": r["ticker"],
+                "loss_usd": round(loss_usd, 2),
+                "loss_pct": round(r["unrealised_pnl_pct"], 2),
+                "sector": sector,
+                "replacement_etf": _SECTOR_REPLACEMENT_ETFS.get(sector, "VTI"),
+                "wash_sale_note": (
+                    "Avoid repurchasing the same security within 30 days to keep the loss deductible."
+                ),
+            })
+
+        tax_saving_estimate = round(abs(total_loss) * TAX_RATE, 2)
+
+        observations: list[Observation] = []
+        for w in warnings[:2]:
+            observations.append(Observation(severity="warning", text=w))
+        if candidates:
+            observations.append(Observation(
+                severity="info",
+                text=(
+                    f"Found {len(candidates)} position(s) at a loss totalling "
+                    f"${abs(total_loss):,.2f} — harvesting could offset roughly "
+                    f"${tax_saving_estimate:,.2f} in taxes at a 30% rate."
+                ),
+            ))
+            top = candidates[0]
+            observations.append(Observation(
+                severity="info",
+                text=(
+                    f"Largest loss: {top['ticker']} ({top['loss_pct']:+.2f}%). "
+                    f"To preserve {top['sector']} exposure consider {top['replacement_etf']} as a "
+                    f"wash-sale-safe replacement."
+                ),
+            ))
+        else:
+            observations.append(Observation(
+                severity="info",
+                text="No positions are currently at a loss — nothing to harvest right now.",
+            ))
+
+        total = sum(r["current_value"] for r in rows) or 0.0
+        profile = _parse_profile(user)
+        return PortfolioHealthResult(
+            concentration_risk=_compute_concentration(rows),
+            performance=Performance(
+                total_return_pct=0.0, annualized_return_pct=0.0,
+                cost_basis_total=0.0, current_value_total=round(total, 2),
+            ),
+            benchmark_comparison=BenchmarkComparison(
+                benchmark=_benchmark_preference(profile.preferences),
+                portfolio_return_pct=0.0, benchmark_return_pct=0.0, alpha_pct=0.0,
+            ),
+            observations=observations[:5],
+            disclaimer=DISCLAIMER,
+            build_guidance=None,
+            sub_intent="tax_loss_harvesting",
+            extras={
+                "tax_rate_assumed": TAX_RATE,
+                "total_unrealised_loss_usd": round(total_loss, 2),
+                "estimated_tax_saving_usd": tax_saving_estimate,
+                "harvest_candidates": candidates,
+            },
+        )
+
+
+async def run(
+    user: dict,
+    llm: LLMClient,
+    intent: str = "",
+    query: str = "",
+) -> PortfolioHealthResult:
+    return await PortfolioHealthAgent(llm).run(user, intent=intent, query=query)

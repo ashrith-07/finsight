@@ -171,13 +171,81 @@ _RISK_OVERRIDE_RX = re.compile(
 _RISK_KEYWORD_RX = re.compile(
     r"\b(stress[\s-]?test(s|ing)?|var\b|value[-\s]at[-\s]risk|worst[-\s]case|"
     r"max(imum)?\s+drawdown|tail\s+risk|black\s+swan|scenario\s+analysis|"
-    r"market\s+crash)\b",
+    r"market\s+crash|beta\w*|volatil\w*|correlat\w*|sharpe|"
+    r"how\s+risky\s+is\s+\w+)\b",
     re.IGNORECASE,
 )
 
 
 def _looks_like_risk_query(query: str) -> bool:
     return bool(_RISK_OVERRIDE_RX.search(query) or _RISK_KEYWORD_RX.search(query))
+
+
+# News routing safety net: matches macro / economic-calendar / sector / sentiment
+# phrasings that the LLM occasionally hands to ``market_research`` instead.
+_NEWS_OVERRIDE_RX = re.compile(
+    r"\b(sector\s+news|tech\s+news|fed\s+meeting|fomc|cpi\s+(release|data|print)?|"
+    r"jobs?\s+report|payrolls?|economic\s+(calendar|events)|"
+    r"earnings\s+(calendar|this\s+week|season)|rate\s+decision|"
+    r"overall\s+(sentiment|market\s+mood)|market\s+sentiment|"
+    r"bullish\s+or\s+bearish|news\s+sentiment)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_news_query(query: str) -> bool:
+    return bool(_NEWS_OVERRIDE_RX.search(query))
+
+
+# Portfolio-management phrasings (rebalance, drift, tax-loss harvesting,
+# diversification) that the LLM occasionally hands to ``investment_strategy``
+# or ``general_query``. Routed back to ``portfolio_health`` so its sub-intent
+# dispatcher can pick the right focused method.
+#
+# NOTE: rebalance phrasings deliberately require a question-marker
+# ("should/do/need to/am I/can I") so the bare command "rebalance my portfolio"
+# stays in ``investment_strategy`` (per fixture).
+_PORTFOLIO_OVERRIDE_RX = re.compile(
+    r"\b("
+    r"(should|do|need\s+to|am|can|why\s+should)\s+i\s+rebalanc\w*|"
+    r"portfolio\s+rebalanc\w*\s+(suggestion|advice|recommend)|"
+    r"target\s+(weight|allocation)\s+drift|drift\s+from\s+target|"
+    r"tax[\s-]?loss\s+harvest\w*|harvest\w*\s+(my\s+)?losses?|"
+    r"sector\s+concentration|"
+    r"am\s+i\s+diversif\w*"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_portfolio_query(query: str) -> bool:
+    return bool(_PORTFOLIO_OVERRIDE_RX.search(query))
+
+
+# 1–5 char uppercase tokens that look like tickers; filtered against a small
+# stop-list so common words like "PE", "AT", "OR" don't slip through.
+_TICKER_LIKE_RX = re.compile(r"\b([A-Z]{1,5})(?:\.[A-Z]{1,2})?\b")
+_TICKER_STOPLIST = frozenset({
+    "I", "A", "AI", "AM", "AN", "AR", "AS", "AT", "BE", "BUT", "BY", "DO",
+    "FOR", "GO", "GET", "HE", "HI", "IF", "IN", "IS", "IT", "ME", "MY", "NO",
+    "OF", "ON", "OR", "PE", "SO", "TO", "UP", "US", "VS", "WE", "BUY", "SELL",
+    "OWN", "SEE", "NOW", "HOW", "WHO", "WHY", "OUT", "ALL", "ANY", "FED",
+    "USD", "EUR", "GBP", "JPY", "CPI", "VAR", "MA", "ETF", "PDF", "MD",
+    "SPY", "QQQ",  # left out of *fallback* extraction so they don't override portfolio queries
+})
+
+
+def _fallback_extract_tickers(query: str) -> list[str]:
+    """Lightweight ticker extraction for use when the LLM classifier fails."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in _TICKER_LIKE_RX.finditer(query or ""):
+        tok = match.group(1).upper()
+        if tok in _TICKER_STOPLIST or tok in seen:
+            continue
+        seen.add(tok)
+        out.append(tok)
+    return out
 
 
 class IntentPreClassifier:
@@ -233,17 +301,37 @@ class IntentPreClassifier:
             ("show my positions", "portfolio_health"),
             ("how am i doing overall", "portfolio_health"),
             ("portfolio review", "portfolio_health"),
+            # Sub-intent training rows so the pre-classifier handles
+            # diversification / performance / benchmark / rebalance / tax-loss
+            # phrasings even without an LLM call.
+            ("how much have i gained", "portfolio_health"),
+            ("how much have i made on my portfolio", "portfolio_health"),
+            ("am i beating the s&p 500", "portfolio_health"),
+            ("am i outperforming the market", "portfolio_health"),
+            ("should i rebalance my portfolio", "portfolio_health"),
+            ("rebalance my holdings please", "portfolio_health"),
+            ("portfolio rebalance suggestion", "portfolio_health"),
+            ("do i need to rebalance my book", "portfolio_health"),
+            ("am i drifting from my target allocation", "portfolio_health"),
+            ("can i do tax loss harvesting", "portfolio_health"),
+            ("any tax loss opportunities", "portfolio_health"),
             ("price of aapl", "market_research"),
             ("what is tesla trading at", "market_research"),
+            ("what is aapl trading at right now", "market_research"),
+            ("what is the current price of msft", "market_research"),
+            ("show me pe ratio for nvda", "market_research"),
+            ("nvda fundamentals", "market_research"),
+            ("is msft near its 52 week high", "market_research"),
+            ("aapl options activity", "market_research"),
             ("news on amazon", "market_research"),
             ("tell me about microsoft", "market_research"),
             ("nvda earnings outlook", "market_research"),
             ("compare apple and google", "market_research"),
+            ("compare aapl and msft side by side", "market_research"),
             ("what happened to oil today", "market_research"),
             ("how is asml doing", "market_research"),
             ("should i buy more", "investment_strategy"),
             ("when should i sell", "investment_strategy"),
-            ("should i rebalance now", "investment_strategy"),
             ("is it a good time to invest", "investment_strategy"),
             ("what should i do with my portfolio", "investment_strategy"),
             ("should i hedge now", "investment_strategy"),
@@ -384,6 +472,8 @@ class IntentClassifier:
         # Bypass kept narrow: only when we're purely deterministic (no risk keywords
         # AND a real LLM is mocked). Otherwise the override is too useful to skip.
         risk_override = _looks_like_risk_query(query)
+        news_override = _looks_like_news_query(query)
+        portfolio_override = _looks_like_portfolio_query(query)
 
         try:
             if not isinstance(self._llm, MockLLMClient):
@@ -391,6 +481,10 @@ class IntentClassifier:
                 if pre_conf >= IntentPreClassifier.CONFIDENCE_THRESHOLD:
                     if risk_override and pre_agent != "risk_assessment":
                         pre_agent = "risk_assessment"
+                    elif news_override and pre_agent not in {"financial_news", "predictive_analysis"}:
+                        pre_agent = "financial_news"
+                    elif portfolio_override and pre_agent not in {"portfolio_health"}:
+                        pre_agent = "portfolio_health"
                     return ClassifierResult(
                         intent=query,
                         agent=pre_agent,
@@ -427,6 +521,10 @@ class IntentClassifier:
             # market_research or financial_planning that the LLM picked deliberately.
             if risk_override and agent in {"portfolio_health", "general_query", "predictive_analysis"}:
                 agent = "risk_assessment"
+            elif news_override and agent in {"market_research", "general_query"}:
+                agent = "financial_news"
+            elif portfolio_override and agent in {"investment_strategy", "general_query"}:
+                agent = "portfolio_health"
 
             intent = str(payload.get("intent") or "unknown").strip() or "unknown"
             entities = _coerce_entities(payload.get("entities"))
@@ -442,15 +540,36 @@ class IntentClassifier:
             )
         except Exception:
             logger.exception("Intent classification failed; returning fallback result")
+            # Keep deterministic routing alive when the LLM is unavailable
+            # (rate-limited, network failure, etc.). Overrides win first, then
+            # we trust the pre-classifier even at low confidence (>0.15) since
+            # any signal beats falling back to ``general_query``.
             if risk_override:
-                # Don't fall back to general_query for an obvious risk query.
                 return ClassifierResult(
-                    intent=query,
-                    agent="risk_assessment",
-                    entities=Entity(),
-                    safety_verdict="clean",
-                    confidence=0.55,
+                    intent=query, agent="risk_assessment", entities=Entity(),
+                    safety_verdict="clean", confidence=0.55,
                 )
+            if news_override:
+                return ClassifierResult(
+                    intent=query, agent="financial_news", entities=Entity(),
+                    safety_verdict="clean", confidence=0.55,
+                )
+            if portfolio_override:
+                return ClassifierResult(
+                    intent=query, agent="portfolio_health", entities=Entity(),
+                    safety_verdict="clean", confidence=0.55,
+                )
+            try:
+                pre_agent, pre_conf = self._pre.predict(query)
+                if pre_conf >= 0.15:
+                    fallback_tickers = _fallback_extract_tickers(query)
+                    return ClassifierResult(
+                        intent=query, agent=pre_agent,
+                        entities=Entity(tickers=fallback_tickers),
+                        safety_verdict="clean", confidence=pre_conf,
+                    )
+            except Exception:
+                pass
             return self.FALLBACK_RESULT
 
 

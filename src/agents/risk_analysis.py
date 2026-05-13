@@ -10,9 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 import numpy as np
+import yfinance as yf
 from agno.agent import Agent
 from pydantic import BaseModel
 
@@ -40,8 +42,61 @@ class _ObsList(BaseModel):
     observations: list[Observation]
 
 
+_TICKER_RX = re.compile(r"\b[A-Z]{1,5}(?:\.[A-Z]{1,2})?\b")
+_RISK_SUB_INTENT_RULES: list[tuple[str, re.Pattern[str]]] = [
+    # ``[A-Za-z]{1,5}`` lets the regex stay case-insensitive while still acting
+    # as a ticker proxy; the actual ticker resolution happens in
+    # ``_extract_focus_ticker`` which checks against held positions.
+    ("single_stock_risk", re.compile(
+        r"\b(single[\s-]?stock|risk\s+(of|for)\s+[A-Za-z]{1,5}|"
+        r"just\s+[A-Za-z]{1,5}\s+risk|how\s+risky\s+is\s+[A-Za-z]{1,5})\b", re.I)),
+    ("volatility_analysis", re.compile(
+        r"\b(volatil\w*|beta\w*|standard\s+deviation|bollinger|swings?|"
+        r"how\s+much\s+do\s+(my|these)\s+stocks?\s+move)\b", re.I)),
+    ("correlation", re.compile(
+        r"\b(correlat\w*|move\s+together|tied\s+to|relationship\s+between)\b", re.I)),
+    ("stress_test", re.compile(
+        r"\b(stress\s+test|crash|what\s+if|scenario|drop\s+\d+|tail\s+risk|black\s+swan)\b", re.I)),
+    ("var_only", re.compile(
+        r"\b(value[\s-]?at[\s-]?risk|var\b|how\s+much\s+can\s+i\s+lose)\b", re.I)),
+]
+
+
+def _detect_sub_intent(intent: str, query: str) -> str:
+    text = f"{intent or ''} {query or ''}"
+    for label, rx in _RISK_SUB_INTENT_RULES:
+        if rx.search(text):
+            return label
+    return "full_risk"
+
+
+def _extract_focus_ticker(text: str, known_tickers: list[str]) -> str | None:
+    """Pick the first uppercase token that matches a known portfolio holding."""
+    if not text or not known_tickers:
+        return None
+    held = {t.upper() for t in known_tickers}
+    for match in _TICKER_RX.finditer(text):
+        cand = match.group(0).upper()
+        if cand in held:
+            return cand
+    return None
+
+
 def _safe_positions(user: dict) -> list[dict]:
     return [p for p in (user.get("positions") or []) if str(p.get("ticker") or "").strip()]
+
+
+def _safe_beta(info: dict) -> float | None:
+    val = info.get("beta")
+    try:
+        if val is None:
+            return None
+        f = float(val)
+        if f != f:  # NaN
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
 
 
 def _portfolio_returns(
@@ -133,18 +188,64 @@ class RiskAnalysisAgent:
                 raise
         return self._agno
 
+    @staticmethod
+    def _detect_sub_intent(intent: str, query: str) -> str:
+        return _detect_sub_intent(intent, query)
+
     # ---------- main pipeline ----------
-    async def run(self, user: dict) -> dict:
+    async def run(
+        self,
+        user: dict,
+        intent: str = "",
+        query: str = "",
+    ) -> dict:
         positions = _safe_positions(user)
         currency = str(user.get("base_currency") or "USD").upper()
 
         if not positions:
             return self._empty_result(currency, reason="no positions on file")
 
+        sub = self._detect_sub_intent(intent, query)
+
+        # Compute the shared base once; sub-intents add focused sections.
+        base = await self._compute_base_metrics(user, positions, currency)
+        if "error" in base:
+            return base["error"]
+
+        if sub == "single_stock_risk":
+            focus = _extract_focus_ticker(
+                f"{intent} {query}", list(base["weights"].keys())
+            ) or next(iter(base["weights"]), None)
+            if focus is None:
+                base["metrics"]["sub_intent"] = sub
+                return self._finalise(base["metrics"])
+            return await self._single_stock_risk(focus, user, base)
+
+        if sub == "volatility_analysis":
+            return await self._volatility_analysis(user, base)
+
+        if sub == "correlation":
+            return self._correlation_only(base)
+
+        if sub == "var_only":
+            return self._var_only(base)
+
+        if sub == "stress_test":
+            return self._stress_test_only(base)
+
+        # full_risk (default) — return everything with LLM observations.
+        metrics = base["metrics"]
+        metrics["sub_intent"] = "full_risk"
+        observations = await self._generate_observations(metrics)
+        return self._finalise(metrics, observations)
+
+    async def _compute_base_metrics(
+        self, user: dict, positions: list[dict], currency: str,
+    ) -> dict[str, Any]:
         price_history = await self._fetch_all_history(positions)
         valid = {t: pr for t, pr in price_history.items() if pr and len(pr) >= 30}
         if not valid:
-            return self._empty_result(currency, reason="historical price data unavailable")
+            return {"error": self._empty_result(currency, reason="historical price data unavailable")}
 
         last_price = {t: pr[-1] for t, pr in valid.items()}
         position_values: dict[str, float] = {}
@@ -157,7 +258,7 @@ class RiskAnalysisAgent:
 
         portfolio_value = float(sum(position_values.values()))
         if portfolio_value <= 0:
-            return self._empty_result(currency, reason="portfolio value evaluates to zero")
+            return {"error": self._empty_result(currency, reason="portfolio value evaluates to zero")}
 
         weights = {t: v / portfolio_value for t, v in position_values.items()}
         returns_by_ticker = {
@@ -175,7 +276,7 @@ class RiskAnalysisAgent:
         stress = self._run_stress_tests(portfolio_value, weights)
         correlations = self._compute_correlations(valid)
 
-        metrics = {
+        metrics: dict[str, Any] = {
             "currency": currency,
             "portfolio_value": round(portfolio_value, 2),
             "position_weights_pct": {t: round(w * 100, 2) for t, w in weights.items()},
@@ -190,11 +291,293 @@ class RiskAnalysisAgent:
             "significant_correlations": correlations,
             "lookback_days": int(min((len(pr) for pr in valid.values()), default=0)),
         }
+        return {
+            "metrics": metrics,
+            "weights": weights,
+            "position_values": position_values,
+            "portfolio_value": portfolio_value,
+            "valid": valid,
+            "returns_by_ticker": returns_by_ticker,
+        }
 
-        observations = await self._generate_observations(metrics)
+    def _finalise(self, metrics: dict[str, Any], observations: list[Observation] | None = None) -> dict:
+        if observations is None:
+            observations = self._default_observations(metrics)
         metrics["observations"] = [o.model_dump() for o in observations]
         metrics["disclaimer"] = DISCLAIMER
         return metrics
+
+    # ---------- focused sub-intents ----------
+    def _var_only(self, base: dict) -> dict:
+        m = base["metrics"]
+        focused = {
+            "currency": m["currency"],
+            "portfolio_value": m["portfolio_value"],
+            "var": m["var"],
+            "lookback_days": m["lookback_days"],
+            "sub_intent": "var_only",
+        }
+        var95 = m["var"]["one_day_95"]
+        var99 = m["var"]["one_day_99"]
+        obs = [
+            Observation(
+                severity="warning" if var95 > 0.05 * m["portfolio_value"] else "info",
+                text=(
+                    f"1-day 95% VaR is {m['currency']} {var95:,.0f} — roughly "
+                    f"{(var95 / max(m['portfolio_value'], 1) * 100):.2f}% of the book."
+                ),
+            ),
+            Observation(
+                severity="info",
+                text=(
+                    f"At 99% confidence (rare days), the 1-day VaR rises to "
+                    f"{m['currency']} {var99:,.0f}."
+                ),
+            ),
+        ]
+        return self._finalise(focused, obs)
+
+    def _stress_test_only(self, base: dict) -> dict:
+        m = base["metrics"]
+        focused = {
+            "currency": m["currency"],
+            "portfolio_value": m["portfolio_value"],
+            "stress_tests": m["stress_tests"],
+            "sub_intent": "stress_test",
+        }
+        worst = min(m["stress_tests"], key=lambda s: s.get("portfolio_loss_pct", 0)) if m["stress_tests"] else {}
+        obs = []
+        if worst:
+            obs.append(Observation(
+                severity="critical" if worst.get("portfolio_loss_pct", 0) <= -40 else "warning",
+                text=(
+                    f"Worst modeled scenario ({worst.get('scenario')}): "
+                    f"{worst.get('portfolio_loss_pct'):+.2f}% drawdown → "
+                    f"{m['currency']} {abs(worst.get('portfolio_loss_usd', 0)):,.0f} loss."
+                ),
+            ))
+        for s in m["stress_tests"][:2]:
+            if s is worst:
+                continue
+            obs.append(Observation(
+                severity="info",
+                text=(
+                    f"{s.get('scenario')}: {s.get('portfolio_loss_pct'):+.2f}% draw, "
+                    f"surviving value {m['currency']} {s.get('surviving_value'):,.0f}."
+                ),
+            ))
+        return self._finalise(focused, obs[:3])
+
+    def _correlation_only(self, base: dict) -> dict:
+        m = base["metrics"]
+        corrs = m["significant_correlations"]
+        focused = {
+            "currency": m["currency"],
+            "portfolio_value": m["portfolio_value"],
+            "significant_correlations": corrs,
+            "lookback_days": m["lookback_days"],
+            "sub_intent": "correlation",
+        }
+        obs = []
+        if corrs:
+            top = max(corrs.items(), key=lambda kv: abs(kv[1]))
+            a, b = top[0].split("__")
+            obs.append(Observation(
+                severity="warning" if abs(top[1]) > 0.85 else "info",
+                text=(
+                    f"Strongest correlation in the book: {a} ↔ {b} at "
+                    f"{top[1]:+.2f} — they tend to move together in stress."
+                ),
+            ))
+            for pair, r in list(corrs.items())[1:3]:
+                a2, b2 = pair.split("__")
+                obs.append(Observation(
+                    severity="info",
+                    text=f"{a2} ↔ {b2}: correlation {r:+.2f}.",
+                ))
+        else:
+            obs.append(Observation(
+                severity="info",
+                text="No pairwise correlations exceeded the 0.7 significance threshold.",
+            ))
+        return self._finalise(focused, obs[:3])
+
+    async def _volatility_analysis(self, user: dict, base: dict) -> dict:
+        """Beta + 30d std dev + Bollinger band position per holding, ranked by volatility."""
+        weights = base["weights"]
+        valid = base["valid"]
+
+        async def beta_for(ticker: str) -> float | None:
+            def _blocking() -> float | None:
+                try:
+                    return _safe_beta(yf.Ticker(ticker).info or {})
+                except Exception:
+                    return None
+            return await asyncio.to_thread(_blocking)
+
+        betas = await asyncio.gather(*(beta_for(t) for t in weights))
+        rows = []
+        for (ticker, _w), beta in zip(weights.items(), betas):
+            prices = np.array(valid.get(ticker, []), dtype=float)
+            if prices.size < 31:
+                rows.append({"ticker": ticker, "beta": beta, "stddev_30d_pct": None,
+                             "bollinger_position": None, "annualised_vol_pct": None})
+                continue
+            window = prices[-31:]  # 31 closes → 30 daily returns.
+            rets = np.diff(window) / window[:-1]
+            stddev_30d = float(np.std(rets, ddof=1)) * 100.0
+            ann_vol = stddev_30d * float(np.sqrt(self.TRADING_DAYS))
+
+            # Bollinger band (20-day, 2σ) position: 0=lower band, 1=upper band, 0.5=middle.
+            window = prices[-20:] if prices.size >= 20 else prices
+            ma = float(np.mean(window))
+            sd = float(np.std(window, ddof=1))
+            current = float(prices[-1])
+            if sd > 0:
+                upper, lower = ma + 2 * sd, ma - 2 * sd
+                pos = (current - lower) / (upper - lower)
+                bollinger_pos = round(max(0.0, min(1.0, pos)), 3)
+            else:
+                bollinger_pos = None
+
+            rows.append({
+                "ticker": ticker,
+                "beta": round(beta, 3) if beta is not None else None,
+                "stddev_30d_pct": round(stddev_30d, 3),
+                "annualised_vol_pct": round(ann_vol, 2),
+                "bollinger_position": bollinger_pos,
+            })
+
+        rows.sort(
+            key=lambda r: r.get("annualised_vol_pct") if r.get("annualised_vol_pct") is not None else -1,
+            reverse=True,
+        )
+
+        m = base["metrics"]
+        focused = {
+            "currency": m["currency"],
+            "portfolio_value": m["portfolio_value"],
+            "volatility_table": rows,
+            "sub_intent": "volatility_analysis",
+        }
+
+        obs = []
+        if rows:
+            top = rows[0]
+            if top.get("annualised_vol_pct") is not None:
+                obs.append(Observation(
+                    severity="warning" if top["annualised_vol_pct"] > 35 else "info",
+                    text=(
+                        f"Most volatile holding: {top['ticker']} — annualised vol "
+                        f"{top['annualised_vol_pct']:.1f}%"
+                        + (f", beta {top['beta']:.2f}." if top.get("beta") is not None else ".")
+                    ),
+                ))
+            high_beta = [r for r in rows if (r.get("beta") or 0) > 1.5]
+            if high_beta:
+                names = ", ".join(r["ticker"] for r in high_beta[:3])
+                obs.append(Observation(
+                    severity="warning",
+                    text=f"High-beta names amplifying market swings: {names} (beta > 1.5).",
+                ))
+        if not obs:
+            obs.append(Observation(severity="info", text="Volatility metrics computed; no outliers detected."))
+        return self._finalise(focused, obs[:3])
+
+    async def _single_stock_risk(self, ticker: str, user: dict, base: dict) -> dict:
+        """Position size, what-if drops, correlation with rest of book, sector contribution."""
+        ticker = ticker.upper()
+        weights = base["weights"]
+        position_values = base["position_values"]
+        portfolio_value = base["portfolio_value"]
+        valid = base["valid"]
+
+        weight_pct = round(weights.get(ticker, 0.0) * 100, 2)
+        position_value = position_values.get(ticker, 0.0)
+
+        what_if = []
+        for drop in (0.20, 0.30, 0.50):
+            stock_loss = position_value * drop
+            new_total = portfolio_value - stock_loss
+            what_if.append({
+                "stock_drop_pct": round(-drop * 100, 2),
+                "stock_loss_usd": round(-stock_loss, 2),
+                "portfolio_loss_pct": round(-stock_loss / portfolio_value * 100, 2)
+                    if portfolio_value > 0 else 0.0,
+                "portfolio_value_after": round(new_total, 2),
+            })
+
+        # Correlation with every other holding.
+        corrs_with_others: list[dict[str, Any]] = []
+        if ticker in valid and len(valid) >= 2:
+            n = min(len(valid[ticker]), *(len(v) for v in valid.values()))
+            if n >= 10:
+                base_arr = np.array(valid[ticker][-n:], dtype=float)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    base_rets = np.diff(base_arr) / base_arr[:-1]
+                base_rets = np.where(np.isfinite(base_rets), base_rets, 0.0)
+                for other, prices in valid.items():
+                    if other == ticker:
+                        continue
+                    arr = np.array(prices[-n:], dtype=float)
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        rets = np.diff(arr) / arr[:-1]
+                    rets = np.where(np.isfinite(rets), rets, 0.0)
+                    if rets.size != base_rets.size or np.std(rets) == 0 or np.std(base_rets) == 0:
+                        continue
+                    r = float(np.corrcoef(base_rets, rets)[0, 1])
+                    if np.isfinite(r):
+                        corrs_with_others.append({"other_ticker": other, "correlation": round(r, 3)})
+        corrs_with_others.sort(key=lambda x: abs(x["correlation"]), reverse=True)
+
+        # Sector contribution lookup (this stock's sector + how much of book it represents).
+        def _sector() -> str:
+            try:
+                return str((yf.Ticker(ticker).info or {}).get("sector") or "Unknown")
+            except Exception:
+                return "Unknown"
+        sector = await asyncio.to_thread(_sector)
+
+        m = base["metrics"]
+        focused = {
+            "currency": m["currency"],
+            "portfolio_value": portfolio_value,
+            "focus_ticker": ticker,
+            "position_weight_pct": weight_pct,
+            "position_value": round(position_value, 2),
+            "what_if_drops": what_if,
+            "correlations_with_other_holdings": corrs_with_others,
+            "sector": sector,
+            "sub_intent": "single_stock_risk",
+        }
+
+        obs = [
+            Observation(
+                severity="warning" if weight_pct > 40 else "info",
+                text=(
+                    f"{ticker} represents {weight_pct:.2f}% of the book "
+                    f"(position value ~{m['currency']} {position_value:,.0f})."
+                ),
+            ),
+            Observation(
+                severity="warning" if what_if[1]["portfolio_loss_pct"] <= -10 else "info",
+                text=(
+                    f"If {ticker} falls 30%, the portfolio loses "
+                    f"{abs(what_if[1]['portfolio_loss_pct']):.2f}% "
+                    f"({m['currency']} {abs(what_if[1]['stock_loss_usd']):,.0f})."
+                ),
+            ),
+        ]
+        if corrs_with_others:
+            top_corr = corrs_with_others[0]
+            obs.append(Observation(
+                severity="warning" if abs(top_corr["correlation"]) > 0.8 else "info",
+                text=(
+                    f"{ticker} most correlated with {top_corr['other_ticker']} "
+                    f"({top_corr['correlation']:+.2f}) — they tend to move together."
+                ),
+            ))
+        return self._finalise(focused, obs[:3])
 
     # ---------- data fetch ----------
     async def _fetch_all_history(self, positions: list[dict]) -> dict[str, list[float]]:
@@ -386,5 +769,5 @@ class RiskAnalysisAgent:
         }
 
 
-async def run(user: dict, llm: LLMClient) -> dict:
-    return await RiskAnalysisAgent(llm).run(user)
+async def run(user: dict, llm: LLMClient, intent: str = "", query: str = "") -> dict:
+    return await RiskAnalysisAgent(llm).run(user, intent=intent, query=query)
