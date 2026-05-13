@@ -175,11 +175,11 @@ class RiskAnalysisAgent:
         """Lazily build an Agno agent that exposes the same MCP tools to a tool-calling LLM."""
         if self._agno is None:
             try:
-                from src.llm.agno_model import make_agno_model
+                from src.llm.agno_model import get_agno_model
 
                 self._agno = Agent(
                     name="risk_analysis",
-                    model=make_agno_model(),
+                    model=get_agno_model(),
                     tools=[self._yf, self._search],
                     instructions=INSTRUCTIONS,
                 )

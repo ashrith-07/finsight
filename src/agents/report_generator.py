@@ -36,11 +36,11 @@ class ReportGeneratorAgent:
         """Lazily build an Agno agent that can call the report tools directly."""
         if self._agno is None:
             try:
-                from src.llm.agno_model import make_agno_model
+                from src.llm.agno_model import get_agno_model
 
                 self._agno = Agent(
                     name="report_generator",
-                    model=make_agno_model(),
+                    model=get_agno_model(),
                     tools=[self._report, self._yf],
                     instructions=INSTRUCTIONS,
                 )

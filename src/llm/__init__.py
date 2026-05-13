@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from src.llm.agno_model import get_agno_model, get_agno_model_strong
 from src.llm.base import LLMClient, LLMError
 from src.llm.mock_llm import MockExhaustedError, MockLLMClient, SmartMockLLMClient
 
@@ -40,5 +41,7 @@ __all__ = [
     "MockExhaustedError",
     "MockLLMClient",
     "SmartMockLLMClient",
+    "get_agno_model",
+    "get_agno_model_strong",
     "get_llm_client",
 ]
