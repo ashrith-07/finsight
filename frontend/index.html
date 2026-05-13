@@ -442,6 +442,286 @@
       border-left-color: var(--accent);
     }
 
+    /* ---------- Tab nav (right panel) ---------- */
+    .tab-nav {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 4px;
+      margin-bottom: 4px;
+    }
+    .tab-btn {
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      padding: 8px 6px;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+    .tab-panel { display: none; flex-direction: column; gap: 12px; }
+    .tab-panel.active { display: flex; }
+
+    /* ---------- Parallel execution timeline ---------- */
+    .timeline {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: grid;
+      gap: 6px;
+    }
+    .timeline.empty { color: var(--muted); font-size: 12px; padding: 10px 12px; }
+    .timeline-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .tl-row {
+      display: grid;
+      grid-template-columns: 130px 1fr 80px;
+      gap: 8px;
+      align-items: center;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11px;
+    }
+    .tl-name {
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tl-bar {
+      height: 8px;
+      background: var(--panel);
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+    .tl-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), #34d399);
+      border-radius: 4px;
+      transform-origin: left;
+      animation: tl-grow 0.6s ease-out;
+    }
+    @keyframes tl-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+    .tl-ms { color: var(--muted); text-align: right; }
+    .tl-ms .check { color: var(--green); margin-left: 4px; }
+    .tl-summary {
+      margin-top: 4px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 11.5px;
+    }
+    .tl-summary .saved { color: var(--accent); font-weight: 600; }
+
+    /* ---------- Endpoint explorer ---------- */
+    .ep-cat {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+    }
+    .ep-cat-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .ep-cat-title .ep-count {
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .ep-row {
+      display: grid;
+      grid-template-columns: 48px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 4px;
+      border-bottom: 1px dashed var(--border);
+    }
+    .ep-row:last-child { border-bottom: none; }
+    .ep-method {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 9.5px;
+      font-weight: 700;
+      text-align: center;
+      padding: 2px 6px;
+      border-radius: 4px;
+      letter-spacing: 0.05em;
+    }
+    .ep-method.post { background: rgba(52, 211, 153, 0.18); color: var(--green); }
+    .ep-method.get  { background: rgba(96, 165, 250, 0.2);  color: #93c5fd; }
+    .ep-info { display: grid; gap: 1px; min-width: 0; }
+    .ep-path {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11.5px;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ep-desc { color: var(--muted); font-size: 10.5px; }
+    .ep-try {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .ep-try:hover { background: var(--accent-dim); }
+    .ep-try:disabled { opacity: 0.35; border-color: var(--grey); color: var(--muted); }
+
+    /* ---------- Metrics dashboard ---------- */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .metric-card {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: grid;
+      gap: 2px;
+    }
+    .metric-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .metric-value {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .metric-value.accent { color: var(--accent); }
+    .metric-value.warn { color: var(--amber); }
+    .metric-value.danger { color: var(--red); }
+    .metric-bars {
+      display: grid;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .mb-row {
+      display: grid;
+      grid-template-columns: 110px 1fr 36px;
+      gap: 8px;
+      align-items: center;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    .mb-bar {
+      height: 6px;
+      background: var(--panel);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .mb-bar-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+      transition: width 0.4s ease;
+    }
+    .mb-count { color: var(--muted); text-align: right; }
+    .metrics-foot {
+      font-size: 10.5px;
+      color: var(--muted);
+      text-align: right;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+    }
+
+    /* ---------- Parallel badge on chat bubbles ---------- */
+    .parallel-badge {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      color: var(--bg);
+      background: var(--accent);
+      padding: 2px 6px;
+      border-radius: 999px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+
+    /* ---------- Word fade-in for streamed deltas ---------- */
+    .delta-word {
+      display: inline-block;
+      opacity: 0;
+      animation: word-in 0.18s ease-out forwards;
+    }
+    @keyframes word-in {
+      from { opacity: 0; transform: translateY(2px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ---------- Raw JSON collapsible ---------- */
+    details.raw-json {
+      margin-top: 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel-2);
+      font-size: 11.5px;
+    }
+    details.raw-json summary {
+      cursor: pointer;
+      padding: 6px 10px;
+      font-size: 10.5px;
+      font-weight: 600;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      list-style: none;
+      user-select: none;
+    }
+    details.raw-json summary::before {
+      content: '▶';
+      display: inline-block;
+      margin-right: 6px;
+      transition: transform 0.15s;
+      color: var(--accent);
+    }
+    details.raw-json[open] summary::before { transform: rotate(90deg); }
+    details.raw-json pre {
+      margin: 0;
+      padding: 8px 10px;
+      max-height: 320px;
+      overflow: auto;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11px;
+      color: var(--text);
+      border-top: 1px solid var(--border);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
     /* ---------- Scrollbar ---------- */
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
@@ -478,20 +758,57 @@
 
   <!-- ============== RIGHT: PIPELINE ============== -->
   <aside class="pipeline panel">
-    <div>
-      <div class="section-title">Agent Ecosystem</div>
-      <div id="agentCards"></div>
-    </div>
+    <nav class="tab-nav" role="tablist">
+      <button class="tab-btn active" data-tab="ecosystem" type="button">Ecosystem</button>
+      <button class="tab-btn" data-tab="api" type="button">API Explorer</button>
+      <button class="tab-btn" data-tab="metrics" type="button">Live Metrics</button>
+    </nav>
 
-    <div>
-      <div class="section-title">MCP Servers</div>
-      <div id="mcpRows"></div>
-    </div>
+    <!-- Tab 1 — Ecosystem -->
+    <section class="tab-panel active" id="tab-ecosystem">
+      <div>
+        <div class="section-title">Agent Ecosystem</div>
+        <div id="agentCards"></div>
+      </div>
 
-    <div>
-      <div class="section-title">Parallel Execution Log</div>
-      <div id="execLog"></div>
-    </div>
+      <div>
+        <div class="section-title">MCP Servers</div>
+        <div id="mcpRows"></div>
+      </div>
+
+      <div>
+        <div class="section-title">Parallel Execution Timeline</div>
+        <div id="timeline" class="timeline empty">
+          Send a query to visualise per-agent timings here.
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">Activity Log</div>
+        <div id="execLog"></div>
+      </div>
+    </section>
+
+    <!-- Tab 2 — API Explorer -->
+    <section class="tab-panel" id="tab-api">
+      <div>
+        <div class="section-title">REST Endpoints</div>
+        <div id="endpointList"></div>
+      </div>
+    </section>
+
+    <!-- Tab 3 — Live Metrics -->
+    <section class="tab-panel" id="tab-metrics">
+      <div>
+        <div class="section-title">Service Metrics</div>
+        <div class="metric-grid" id="metricGrid"></div>
+        <div style="margin-top:12px;">
+          <div class="section-title">Requests Per Agent</div>
+          <div class="metric-bars" id="metricBars"></div>
+        </div>
+        <div class="metrics-foot" id="metricsFoot">never refreshed</div>
+      </div>
+    </section>
   </aside>
 
   <script>
@@ -535,6 +852,27 @@
     const agentCardsEl = document.getElementById('agentCards');
     const mcpRowsEl = document.getElementById('mcpRows');
     const execLogEl = document.getElementById('execLog');
+    const timelineEl = document.getElementById('timeline');
+    const endpointListEl = document.getElementById('endpointList');
+    const metricGridEl = document.getElementById('metricGrid');
+    const metricBarsEl = document.getElementById('metricBars');
+    const metricsFootEl = document.getElementById('metricsFoot');
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabPanels = document.querySelectorAll('.tab-panel');
+
+    // Module-level metrics polling timer; we want at most one in flight.
+    let metricsTimer = null;
+    const METRICS_INTERVAL_MS = 10_000;
+
+    // Pretty labels for endpoint categories — UI only.
+    const PRETTY_AGENT_LABEL = {
+      portfolio_health: 'Portfolio Health',
+      market_research: 'Market Research',
+      risk_analysis: 'Risk Analysis',
+      news_agent: 'News',
+      financial_news: 'News',
+      report_generator: 'Reports',
+    };
 
     // ===========================================================
     // Init
@@ -544,8 +882,25 @@
     async function init() {
       renderAgentCards([]);
       renderMcpRows();
-      await Promise.all([loadUsers(), loadAgents()]);
+      wireTabs();
+      await Promise.all([loadUsers(), loadAgents(), loadEndpoints(), refreshMetrics()]);
+      // Auto-refresh metrics every 10s — only when the metrics tab is visible
+      // matters for UX, but the cost of a /metrics call is negligible so we
+      // poll unconditionally for live numbers.
+      metricsTimer = setInterval(refreshMetrics, METRICS_INTERVAL_MS);
       pushLog('Ready. Pick a profile and send a question.', false);
+    }
+
+    function wireTabs() {
+      for (const btn of tabBtns) {
+        btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+      }
+    }
+
+    function activateTab(tabId) {
+      for (const btn of tabBtns) btn.classList.toggle('active', btn.dataset.tab === tabId);
+      for (const panel of tabPanels) panel.classList.toggle('active', panel.id === `tab-${tabId}`);
+      if (tabId === 'metrics') refreshMetrics();
     }
 
     async function loadAgents() {
@@ -574,11 +929,22 @@
       }
       userProfiles.push({ id: 'custom', label: 'Custom — paste JSON below', profile: null });
       userSelect.innerHTML = userProfiles
-        .map((u, i) => `<option value="${i}">${escapeHtml(u.label)}</option>`)
+        .map((u, i) => `<option value="${i}">${escapeHtml(formatUserOption(u))}</option>`)
         .join('');
       userSelect.addEventListener('change', () => {
         customBlock.classList.toggle('show', userSelect.value === String(userProfiles.length - 1));
       });
+    }
+
+    function formatUserOption(u) {
+      // ``label`` already comes pre-formatted from /users (name + risk + count).
+      // For fallback profiles we synthesise the same shape from the raw profile.
+      if (!u.profile) return u.label;
+      const p = u.profile;
+      const name = p.name || u.label;
+      const risk = (p.risk_profile || 'n/a').toLowerCase();
+      const positions = (p.positions || []).length;
+      return `${name} — ${risk}, ${positions} position${positions === 1 ? '' : 's'}`;
     }
 
     // ===========================================================
@@ -692,14 +1058,40 @@
       const el = document.createElement('div');
       el.className = 'msg ai';
       el.innerHTML = `
-        <div class="badge" data-badge>thinking</div>
+        <div>
+          <span class="badge" data-badge>thinking</span>
+          <span data-parallel-badge></span>
+        </div>
         <span data-body></span>
         <span class="typing-dot" data-dot></span>
-        <div data-rich></div>`;
+        <div data-rich></div>
+        <div data-raw></div>`;
       messagesEl.appendChild(el);
       trimHistory();
       scrollChat();
       return el;
+    }
+
+    /**
+     * Append an SSE delta chunk with per-word fade-in. Each whitespace-separated
+     * token becomes its own ``<span>`` so the entrance animation can stagger.
+     * Whitespace is preserved verbatim so multi-line markdown still renders
+     * cleanly inside the bubble.
+     */
+    function appendDeltaWithFade(bodyEl, chunk) {
+      // Split keeping whitespace so we don't lose newlines/spaces around words.
+      const parts = chunk.split(/(\s+)/);
+      for (const p of parts) {
+        if (!p) continue;
+        if (/^\s+$/.test(p)) {
+          bodyEl.appendChild(document.createTextNode(p));
+        } else {
+          const span = document.createElement('span');
+          span.className = 'delta-word';
+          span.textContent = p;
+          bodyEl.appendChild(span);
+        }
+      }
     }
 
     function appendErrorMessage(text) {
@@ -729,6 +1121,10 @@
       messagesEl.innerHTML = '';
       execLogEl.innerHTML = '';
       resetAgentStates();
+      if (timelineEl) {
+        timelineEl.classList.add('empty');
+        timelineEl.innerHTML = 'Send a query to visualise per-agent timings here.';
+      }
     });
     customToggle.addEventListener('click', () => {
       customBlock.classList.toggle('show');
@@ -795,7 +1191,7 @@
 
         await consumeSse(res.body, {
           onDelta: (chunk) => {
-            bodyEl.textContent += chunk;
+            appendDeltaWithFade(bodyEl, chunk);
             scrollChat();
           },
           onResult: (jsonStr) => {
@@ -915,33 +1311,68 @@
       const primary = parsed.agent || 'general_query';
       badgeEl.textContent = (PRETTY[primary] || primary).replace('_', ' ');
 
-      const ran = inferAgentsRan(parsed);
+      // Authoritative source of truth for "what ran": orchestrator's
+      // execution_metadata. Fall back to nested-key inference for stub paths.
+      const meta = parsed.execution_metadata || null;
+      const ran = (meta && meta.agents_ran && meta.agents_ran.length)
+        ? normalizeAgentNames(meta.agents_ran)
+        : inferAgentsRan(parsed);
       const ranSet = new Set(ran);
 
-      // Reconcile: agents we predicted but didn't actually run → revert to idle.
-      // Agents that did run → mark done with shared elapsed.
       for (const a of (expected || [])) {
         if (!ranSet.has(a)) setAgentState(a, null);
       }
-      // Per-agent timing isn't streamed; share request elapsed across siblings as a UX cue.
-      const perAgent = ran.length ? Math.round(elapsedMs / ran.length) : elapsedMs;
-      for (const a of ran) setAgentState(a, 'done', perAgent);
+      for (const a of ran) {
+        const ms = (meta && meta.timings) ? lookupAgentMs(meta.timings, a) : null;
+        setAgentState(a, 'done', ms != null ? ms : Math.round(elapsedMs / Math.max(1, ran.length)));
+      }
 
       const mcpHit = new Set();
       for (const a of ran) for (const m of MCP_USAGE[a] || []) mcpHit.add(m);
       bumpMcpServers([...mcpHit]);
 
-      if (ran.length > 1) {
-        pushLog(`${ran.join(' + ')} ran in parallel (${(elapsedMs / 1000).toFixed(2)}s)`, true);
-      } else {
-        pushLog(`${ran[0] || primary} completed in ${(elapsedMs / 1000).toFixed(2)}s`, false);
+      // Parallel badge + raw JSON pane attached to the bubble.
+      if (meta && meta.parallel) {
+        const pb = aiBubble.querySelector('[data-parallel-badge]');
+        if (pb) pb.innerHTML = `<span class="parallel-badge" title="Multiple agents ran concurrently">parallel ×${ran.length}</span>`;
       }
+      const rawEl = aiBubble.querySelector('[data-raw]');
+      if (rawEl) rawEl.innerHTML = renderRawJson(parsed);
 
-      // Render the rich result block under the chat bubble
+      // Drive the structured timeline panel + free-text activity log.
+      renderTimeline(meta, ran, elapsedMs);
+      logExecution(meta, ran, primary, elapsedMs);
+
       const richEl = aiBubble.querySelector('[data-rich]');
       if (richEl) {
         richEl.innerHTML = renderRichResult(parsed);
         scrollChat();
+      }
+
+      // Increment metrics counter optimistically — the next /metrics poll
+      // will overwrite anyway, but this keeps the dashboard alive between polls.
+      refreshMetrics().catch(() => {});
+    }
+
+    function normalizeAgentNames(names) {
+      // Orchestrator labels news as "news_agent"; cards/PRIMARY_AGENTS use "financial_news".
+      return (names || []).map(n => (n === 'news_agent' ? 'financial_news' : n));
+    }
+
+    function lookupAgentMs(timings, agentName) {
+      if (!timings) return null;
+      if (timings[agentName] != null) return timings[agentName];
+      // Map UI → orchestrator label (only differs for news).
+      if (agentName === 'financial_news' && timings.news_agent != null) return timings.news_agent;
+      return null;
+    }
+
+    function logExecution(meta, ran, primary, elapsedMs) {
+      const wall = (meta && meta.wall_time_ms) ? meta.wall_time_ms : elapsedMs;
+      if (ran.length > 1) {
+        pushLog(`${ran.join(' + ')} ran in parallel (${(wall / 1000).toFixed(2)}s)`, true);
+      } else {
+        pushLog(`${ran[0] || primary} completed in ${(wall / 1000).toFixed(2)}s`, false);
       }
     }
 
@@ -1169,6 +1600,295 @@
     function escapeAttr(s) {
       return String(s == null ? '' : s).replace(/"/g, '&quot;');
     }
+
+    // ===========================================================
+    // Renderers — timeline, raw JSON, endpoint explorer, metrics
+    // ===========================================================
+    function renderTimeline(meta, ran, elapsedMs) {
+      if (!timelineEl) return;
+      if (!meta || !meta.timings || !Object.keys(meta.timings).length) {
+        timelineEl.classList.remove('empty');
+        timelineEl.classList.add('empty');
+        timelineEl.innerHTML = `<div class="timeline-title">Last Run</div>
+          <div class="tl-row" style="grid-template-columns:1fr;color:var(--muted);">
+            ${escapeHtml((ran[0] || 'agent') + ' — ' + (elapsedMs) + ' ms')}
+          </div>`;
+        return;
+      }
+      timelineEl.classList.remove('empty');
+
+      // Bar widths scale to the slowest task — visually emphasises the parallelism.
+      const entries = Object.entries(meta.timings);
+      const maxMs = Math.max(...entries.map(([, ms]) => ms), 1);
+
+      const rows = entries
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, ms]) => {
+          const display = PRETTY_AGENT_LABEL[name] || name;
+          const pct = Math.max(2, (ms / maxMs) * 100);
+          return `
+            <div class="tl-row">
+              <div class="tl-name" title="${escapeAttr(name)}">${escapeHtml(display)}</div>
+              <div class="tl-bar"><div class="tl-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
+              <div class="tl-ms">${ms} ms<span class="check">✓</span></div>
+            </div>`;
+        })
+        .join('');
+
+      const wall = meta.wall_time_ms || 0;
+      const seq = meta.sequential_estimate_ms || 0;
+      const saved = meta.saved_ms || 0;
+      const summary = meta.parallel
+        ? `<div class="tl-summary">
+             <span>Wall: <strong>${wall} ms</strong> (parallel)</span>
+             <span class="saved">Sequential ≈ ${seq} ms · saved ${saved} ms</span>
+           </div>`
+        : `<div class="tl-summary">
+             <span>Single agent — total ${wall} ms</span>
+             <span style="color:var(--muted);">no parallelism</span>
+           </div>`;
+
+      timelineEl.innerHTML = `
+        <div class="timeline-title">Last Run · ${meta.parallel ? 'PARALLEL' : 'SERIAL'}</div>
+        ${rows}
+        ${summary}
+      `;
+    }
+
+    function renderRawJson(parsed) {
+      let pretty = '';
+      try { pretty = JSON.stringify(parsed, null, 2); } catch { pretty = String(parsed); }
+      return `<details class="raw-json">
+        <summary>Raw JSON · ${pretty.length.toLocaleString()} chars</summary>
+        <pre>${escapeHtml(pretty)}</pre>
+      </details>`;
+    }
+
+    async function loadEndpoints() {
+      let data;
+      try {
+        const res = await fetch('/docs-custom');
+        data = await res.json();
+      } catch (e) {
+        endpointListEl.innerHTML =
+          '<div class="hint">Endpoint catalogue unavailable (server not reachable).</div>';
+        return;
+      }
+
+      const cats = data.categories || {};
+      const order = ['portfolio', 'market', 'risk', 'news', 'calculator', 'report', 'system', 'chat'];
+      const seen = new Set();
+      const orderedKeys = [
+        ...order.filter(k => cats[k]),
+        ...Object.keys(cats).filter(k => !order.includes(k)),
+      ];
+
+      const html = orderedKeys.map(key => {
+        if (seen.has(key)) return '';
+        seen.add(key);
+        const cat = cats[key] || {};
+        const eps = cat.endpoints || [];
+        const rows = eps.map(ep => endpointRowHtml(ep)).join('');
+        return `
+          <div class="ep-cat">
+            <div class="ep-cat-title">
+              <span>${escapeHtml(key)}</span>
+              <span class="ep-count">${eps.length} endpoint${eps.length === 1 ? '' : 's'}</span>
+            </div>
+            ${rows}
+          </div>`;
+      }).join('');
+
+      endpointListEl.innerHTML = html ||
+        '<div class="hint">No endpoints exposed by /docs-custom.</div>';
+
+      // Wire Try-it buttons.
+      for (const btn of endpointListEl.querySelectorAll('[data-try]')) {
+        btn.addEventListener('click', () => {
+          const path = btn.dataset.try;
+          const example = btn.dataset.example || '';
+          tryEndpoint(path, example);
+        });
+      }
+    }
+
+    function endpointRowHtml(ep) {
+      const method = String(ep.method || 'POST').toUpperCase();
+      const methodClass = method === 'GET' ? 'get' : 'post';
+      const desc = ep.notes || PATH_DESCRIPTION[ep.path] || ep.path;
+      const example = TRY_QUERY[ep.path] || '';
+      const exJson = ep.example != null ? JSON.stringify(ep.example) : '';
+      // ``data-try`` is the path; ``data-example`` is the chat-prefill (when relevant).
+      // Endpoints without a meaningful chat equivalent (calculators, reports) get
+      // a disabled button — there's no "ask" path for them via /chat.
+      const canTry = !!example;
+      return `
+        <div class="ep-row">
+          <span class="ep-method ${methodClass}">${method}</span>
+          <div class="ep-info">
+            <div class="ep-path" title="${escapeAttr(exJson)}">${escapeHtml(ep.path)}</div>
+            <div class="ep-desc">${escapeHtml(desc)}</div>
+          </div>
+          <button class="ep-try" type="button" data-try="${escapeAttr(ep.path)}"
+            data-example="${escapeAttr(example)}" ${canTry ? '' : 'disabled title="No /chat equivalent"'}>
+            Try
+          </button>
+        </div>`;
+    }
+
+    function tryEndpoint(path, example) {
+      // Prefill the chat input with the example query and switch back to the
+      // ecosystem tab so the run animates in front of the user.
+      queryInput.value = example;
+      queryInput.focus();
+      activateTab('ecosystem');
+    }
+
+    async function refreshMetrics() {
+      let data;
+      try {
+        const res = await fetch('/metrics');
+        data = await res.json();
+      } catch (e) {
+        metricGridEl.innerHTML =
+          '<div class="hint" style="grid-column:1 / -1;">Metrics endpoint unreachable.</div>';
+        return;
+      }
+
+      const cards = [
+        { label: 'Total requests', value: fmtInt(data.total_requests_served), cls: 'accent' },
+        { label: 'Safety blocks', value: fmtInt(data.safety_blocks_count),
+          cls: (data.safety_blocks_count || 0) > 0 ? 'warn' : '' },
+        { label: 'Parallel runs', value: fmtInt(data.parallel_execution_count), cls: 'accent' },
+        { label: 'Avg latency', value: fmtMs(data.average_response_time_ms) },
+        { label: 'P95 latency', value: data.p95_response_time_ms != null ? fmtMs(data.p95_response_time_ms) : '—' },
+        { label: 'Uptime', value: fmtDuration(data.uptime_seconds) },
+      ];
+      metricGridEl.innerHTML = cards.map(c => `
+        <div class="metric-card">
+          <div class="metric-label">${escapeHtml(c.label)}</div>
+          <div class="metric-value ${c.cls || ''}">${escapeHtml(c.value)}</div>
+        </div>
+      `).join('');
+
+      const perAgent = data.requests_per_agent || {};
+      const agentEntries = Object.entries(perAgent).sort((a, b) => b[1] - a[1]);
+      const maxCount = Math.max(...agentEntries.map(([, c]) => c), 1);
+      metricBarsEl.innerHTML = agentEntries.length
+        ? agentEntries.map(([name, count]) => {
+            const display = PRETTY[name] || name;
+            const pct = (count / maxCount) * 100;
+            return `
+              <div class="mb-row">
+                <div title="${escapeAttr(name)}">${escapeHtml(display)}</div>
+                <div class="mb-bar"><div class="mb-bar-fill" style="width:${pct.toFixed(1)}%"></div></div>
+                <div class="mb-count">${count}</div>
+              </div>`;
+          }).join('')
+        : '<div class="hint">No requests served yet.</div>';
+
+      metricsFootEl.textContent = `last refresh ${nowHms()} · window ${data.response_time_window_size || 0}`;
+    }
+
+    function fmtInt(v) {
+      if (v == null) return '0';
+      return Number(v).toLocaleString();
+    }
+    function fmtMs(v) {
+      if (v == null) return '—';
+      const n = Number(v);
+      if (n >= 1000) return `${(n / 1000).toFixed(2)} s`;
+      return `${n.toFixed(0)} ms`;
+    }
+    function fmtDuration(secs) {
+      if (secs == null) return '—';
+      const s = Math.round(Number(secs));
+      if (s < 60) return `${s}s`;
+      if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      return `${h}h ${m}m`;
+    }
+
+    /**
+     * Description fallback for endpoints — used when /docs-custom doesn't return notes.
+     * Keys are paths (POST or GET); values are short single-line summaries.
+     */
+    const PATH_DESCRIPTION = {
+      '/chat': 'Streaming multi-agent pipeline (SSE)',
+      '/portfolio/health': 'Full portfolio health check',
+      '/portfolio/concentration': 'Concentration risk + sector breakdown',
+      '/portfolio/performance': 'Returns vs cost basis, best/worst positions',
+      '/portfolio/benchmark': 'Compare against S&P 500 / QQQ / preferred index',
+      '/portfolio/rebalance': 'Rebalancing trades with exact buy/sell amounts',
+      '/portfolio/tax-loss': 'Tax-loss harvesting opportunities',
+      '/portfolio/sector-exposure': 'Sector + geography breakdown',
+      '/portfolio/dividends': 'Annual dividend income analysis',
+      '/market/snapshot': 'Live price + day change + volume',
+      '/market/fundamentals': 'P/E, revenue, margins, debt ratios',
+      '/market/technical': '52-week range, MAs, golden/death cross',
+      '/market/compare': 'Side-by-side comparison of 2+ tickers',
+      '/market/options': 'Options activity + implied vol',
+      '/market/screen': 'Screen multiple stocks by key metrics',
+      '/risk/full': 'Full risk pack — VaR, drawdown, Sharpe, stress',
+      '/risk/var': 'Value at Risk at 95% & 99%',
+      '/risk/stress-test': 'Five historical crash scenarios',
+      '/risk/correlation': 'Pairwise correlation matrix',
+      '/risk/volatility': 'Beta, std-dev, Bollinger position',
+      '/news/tickers': 'Latest news per ticker',
+      '/news/market': 'Broad market headlines',
+      '/news/sentiment': 'Aggregate bullish/bearish score',
+      '/news/economic-calendar': 'Fed / earnings / macro releases',
+      '/news/sector': 'News grouped by sector',
+      '/calculate/compound-interest': 'Compound growth + monthly contributions',
+      '/calculate/dca': 'Dollar-cost-average projection',
+      '/calculate/retirement': 'Retirement readiness check',
+      '/calculate/options-price': 'Black-Scholes price + Greeks',
+      '/report/portfolio': 'Generate full portfolio report (md/pdf)',
+      '/report/market': 'Generate market research report',
+      '/report/risk': 'Generate risk analysis report',
+      '/health': 'Liveness probe',
+      '/agents': 'Agents + MCP servers registry',
+      '/users': 'Bundled fixture profiles',
+      '/metrics': 'Live runtime metrics snapshot',
+      '/docs-custom': 'This catalogue, as JSON',
+    };
+
+    /**
+     * Suggested chat queries for endpoints that have a natural conversational
+     * equivalent. Routes the user to the orchestrator + animates the timeline.
+     * Endpoints that are pure-data REST (calculators, structured reports) are
+     * intentionally absent — they're best invoked via fetch from the API tab.
+     */
+    const TRY_QUERY = {
+      '/chat': 'How is my portfolio doing?',
+      '/portfolio/health': 'How is my portfolio doing?',
+      '/portfolio/concentration': 'Am I too concentrated in any one stock?',
+      '/portfolio/performance': 'What are my returns vs cost basis?',
+      '/portfolio/benchmark': 'Am I beating the S&P 500?',
+      '/portfolio/rebalance': 'Should I rebalance my portfolio?',
+      '/portfolio/tax-loss': 'Are there tax-loss harvesting opportunities?',
+      '/portfolio/sector-exposure': 'Show me my sector and geographic exposure',
+      '/portfolio/dividends': 'How much dividend income am I earning?',
+      '/market/snapshot': 'What is the current price of NVDA?',
+      '/market/fundamentals': 'Show me NVDA fundamentals — P/E, revenue, margin',
+      '/market/technical': 'Where is TSLA in its 52-week range with technical levels?',
+      '/market/compare': 'Compare AAPL vs MSFT vs GOOGL',
+      '/market/options': 'Show me options activity and implied vol for SPY',
+      '/risk/full': 'Run a full risk analysis on my portfolio',
+      '/risk/var': 'What is my VaR at 95% confidence?',
+      '/risk/stress-test': 'Stress test my portfolio against historical crashes',
+      '/risk/correlation': 'Show me correlations between my holdings',
+      '/risk/volatility': 'Show me volatility and beta per holding',
+      '/news/tickers': 'Latest news on AAPL',
+      '/news/market': 'What is the broad market news today?',
+      '/news/sentiment': 'How is sentiment on NVDA right now?',
+      '/news/economic-calendar': 'What economic events are coming up this week?',
+      '/news/sector': 'What is happening in the technology sector?',
+      '/report/portfolio': 'Generate a portfolio report for me',
+      '/report/market': 'Generate a market report for AAPL and NVDA',
+      '/report/risk': 'Generate a risk analysis report for my portfolio',
+    };
 
     /**
      * Detect which agents executed by inspecting the orchestrator's nested result keys.

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import time
 
-from src.models import AgentResponse, Entity
+from src.models import AgentResponse, Entity, ExecutionMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class StubAgent:
     }
 
     async def run(self, agent: str, intent: str, entities: Entity) -> AgentResponse:
+        start = time.perf_counter()
         try:
             message_template = self.NOT_IMPLEMENTED_MESSAGES.get(
                 agent, "This agent is not yet available."
@@ -54,6 +56,7 @@ class StubAgent:
                 entities=entities,
                 result=None,
                 message=message,
+                execution_metadata=self._stub_metadata(agent, start),
             )
         except Exception:
             logger.exception("StubAgent.run failed for agent=%s", agent)
@@ -64,7 +67,21 @@ class StubAgent:
                 entities=entities,
                 result=None,
                 message="This capability is not available yet. Please try again later.",
+                execution_metadata=self._stub_metadata(agent, start),
             )
+
+    @staticmethod
+    def _stub_metadata(agent: str, start: float) -> ExecutionMetadata:
+        ms = int(round((time.perf_counter() - start) * 1000))
+        name = agent or "general_query"
+        return ExecutionMetadata(
+            agents_ran=[name],
+            timings={name: ms},
+            parallel=False,
+            wall_time_ms=ms,
+            sequential_estimate_ms=ms,
+            saved_ms=0,
+        )
 
     def _summarize_entities(self, entities: Entity) -> str:
         parts: list[str] = []

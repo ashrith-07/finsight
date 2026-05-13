@@ -21,7 +21,13 @@ from src.agents import (
 )
 from src.agents.stub import StubAgent
 from src.llm.base import LLMClient
-from src.models import AgentResponse, ClassifierResult, Entity, PortfolioHealthResult
+from src.models import (
+    AgentResponse,
+    ClassifierResult,
+    Entity,
+    ExecutionMetadata,
+    PortfolioHealthResult,
+)
 
 logger = logging.getLogger("valura.orchestrator")
 
@@ -104,26 +110,32 @@ class ValuraOrchestrator:
 
         if agent == "report_generator" or self._wants_report(intent):
             payload = await self._run_report_ecosystem(entities, user, intent, query)
+            timings, wall = _pop_timings(payload)
             return self._build_agent_response(
                 "report_generator",
                 intent,
                 entities,
                 payload,
                 message=self._message_for_report(payload),
+                execution_metadata=self._build_exec_metadata(timings, wall),
             )
 
         if agent == "financial_news":
-            payload = await self._run_news_ecosystem(entities, user, intent, query)
+            eco = await self._run_news_ecosystem(entities, user, intent, query)
+            timings, wall = _pop_timings(eco)
+            payload = eco.get("payload") or {}
             return self._build_agent_response(
                 "financial_news",
                 intent,
                 entities,
                 {"market_news": payload},
                 message=self._message_for_news(payload),
+                execution_metadata=self._build_exec_metadata(timings, wall),
             )
 
         if agent == "portfolio_health":
             eco = await self._run_portfolio_ecosystem(user, entities, intent, query)
+            timings, wall = _pop_timings(eco)
             if eco.get("portfolio") is None:
                 return self._build_agent_response(
                     agent,
@@ -131,6 +143,7 @@ class ValuraOrchestrator:
                     entities,
                     {"error": eco.get("error") or "portfolio analysis failed"},
                     message="Portfolio analysis failed; partial ecosystem data may still be attached.",
+                    execution_metadata=self._build_exec_metadata(timings, wall),
                 )
             combined = self._synthesise_portfolio_result(
                 eco.get("portfolio"),
@@ -143,11 +156,13 @@ class ValuraOrchestrator:
                 entities,
                 combined,
                 message=self._message_for_portfolio(combined),
+                execution_metadata=self._build_exec_metadata(timings, wall),
             )
 
         if agent == "market_research":
             tickers = list(entities.tickers or [])
             eco = await self._run_market_research_ecosystem(tickers, intent, user, query)
+            timings, wall = _pop_timings(eco)
             combined = self._synthesise_market_result(
                 eco.get("market"),
                 eco.get("news") or {},
@@ -159,10 +174,12 @@ class ValuraOrchestrator:
                 entities,
                 combined,
                 message=self._message_for_market(combined),
+                execution_metadata=self._build_exec_metadata(timings, wall),
             )
 
         if agent == "risk_assessment":
             eco = await self._run_risk_assessment_ecosystem(user, entities, intent, query)
+            timings, wall = _pop_timings(eco)
             combined = self._synthesise_risk_assessment_result(eco)
             return self._build_agent_response(
                 agent,
@@ -170,9 +187,24 @@ class ValuraOrchestrator:
                 entities,
                 combined,
                 message=self._message_for_risk_ecosystem(combined),
+                execution_metadata=self._build_exec_metadata(timings, wall),
             )
 
-        return await self._stub.run(agent, intent, entities)
+        # Stub path — single synthetic timing so the UI's exec_metadata
+        # contract is honoured even for not-yet-implemented agents.
+        stub_start = time.perf_counter()
+        stub_resp = await self._stub.run(agent, intent, entities)
+        stub_ms = round((time.perf_counter() - stub_start) * 1000)
+        return stub_resp.model_copy(update={
+            "execution_metadata": ExecutionMetadata(
+                agents_ran=[agent or "general_query"],
+                timings={agent or "general_query": stub_ms},
+                parallel=False,
+                wall_time_ms=stub_ms,
+                sequential_estimate_ms=stub_ms,
+                saved_ms=0,
+            )
+        })
 
     # --- ecosystems ---------------------------------------------------------
 
@@ -182,56 +214,60 @@ class ValuraOrchestrator:
         positions = user.get("positions") or []
         tickers = [str(p["ticker"]).upper() for p in positions if p.get("ticker")]
 
-        portfolio_res, risk_res, news_res = await asyncio.gather(
-            self._safe_run("portfolio_health", self._portfolio.run(user, intent=intent, query=query)),
-            self._safe_run("risk_analysis", self._risk.run(user, intent=intent, query=query)),
-            self._safe_run(
-                "news_agent",
-                self._news.run(
-                    tickers=tickers, topics=["portfolio", "market"], user=user,
-                    intent=intent, query=query,
-                ),
-            ),
-        )
+        results, timings, wall = await self._run_parallel([
+            ("portfolio_health", self._portfolio.run(user, intent=intent, query=query)),
+            ("risk_analysis", self._risk.run(user, intent=intent, query=query)),
+            ("news_agent", self._news.run(
+                tickers=tickers, topics=["portfolio", "market"],
+                user=user, intent=intent, query=query,
+            )),
+        ])
 
-        out: dict[str, Any] = {"portfolio": portfolio_res, "risk": risk_res, "news": news_res}
-        if portfolio_res is None:
+        out: dict[str, Any] = {
+            "portfolio": results["portfolio_health"],
+            "risk": results["risk_analysis"],
+            "news": results["news_agent"],
+            "_timings": timings,
+            "_wall_ms": wall,
+        }
+        if results["portfolio_health"] is None:
             out["error"] = "Portfolio analysis failed."
         return out
 
     async def _run_market_research_ecosystem(
         self, tickers: list[str], intent: str, user: dict, query: str = "",
     ) -> dict[str, Any]:
-        market_res, news_res = await asyncio.gather(
-            self._safe_run(
-                "market_research",
-                self._market.run(tickers=tickers, intent=intent, query=query),
-            ),
-            self._safe_run(
-                "news_agent",
-                self._news.run(
-                    tickers=tickers, topics=[], user=user, intent=intent, query=query,
-                ),
-            ),
-        )
-        return {"market": market_res, "news": news_res}
+        results, timings, wall = await self._run_parallel([
+            ("market_research", self._market.run(tickers=tickers, intent=intent, query=query)),
+            ("news_agent", self._news.run(
+                tickers=tickers, topics=[], user=user, intent=intent, query=query,
+            )),
+        ])
+        return {
+            "market": results["market_research"],
+            "news": results["news_agent"],
+            "_timings": timings,
+            "_wall_ms": wall,
+        }
 
     async def _run_risk_ecosystem(
         self, user: dict, intent: str = "", query: str = "",
     ) -> dict[str, Any]:
         positions = user.get("positions") or []
         tickers = [str(p["ticker"]).upper() for p in positions if p.get("ticker")]
-        risk_res, news_res = await asyncio.gather(
-            self._safe_run("risk_analysis", self._risk.run(user, intent=intent, query=query)),
-            self._safe_run(
-                "news_agent",
-                self._news.run(
-                    tickers=tickers, topics=["market risk", "volatility"],
-                    user=user, intent=intent, query=query,
-                ),
-            ),
-        )
-        return {"risk": risk_res, "news": news_res}
+        results, timings, wall = await self._run_parallel([
+            ("risk_analysis", self._risk.run(user, intent=intent, query=query)),
+            ("news_agent", self._news.run(
+                tickers=tickers, topics=["market risk", "volatility"],
+                user=user, intent=intent, query=query,
+            )),
+        ])
+        return {
+            "risk": results["risk_analysis"],
+            "news": results["news_agent"],
+            "_timings": timings,
+            "_wall_ms": wall,
+        }
 
     async def _run_risk_assessment_ecosystem(
         self, user: dict, entities: Entity, intent: str = "", query: str = "",
@@ -242,31 +278,37 @@ class ValuraOrchestrator:
             str(p["ticker"]).upper() for p in positions if p.get("ticker")
         ]
 
-        portfolio_res, risk_res, news_res = await asyncio.gather(
-            self._safe_run("portfolio_health", self._portfolio.run(user, intent=intent, query=query)),
-            self._safe_run("risk_analysis", self._risk.run(user, intent=intent, query=query)),
-            self._safe_run(
-                "news_agent",
-                self._news.run(
-                    tickers=tickers, topics=["market risk", "volatility"],
-                    user=user, intent=intent, query=query,
-                ),
-            ),
-        )
-        return {"portfolio": portfolio_res, "risk": risk_res, "news": news_res}
+        results, timings, wall = await self._run_parallel([
+            ("portfolio_health", self._portfolio.run(user, intent=intent, query=query)),
+            ("risk_analysis", self._risk.run(user, intent=intent, query=query)),
+            ("news_agent", self._news.run(
+                tickers=tickers, topics=["market risk", "volatility"],
+                user=user, intent=intent, query=query,
+            )),
+        ])
+        return {
+            "portfolio": results["portfolio_health"],
+            "risk": results["risk_analysis"],
+            "news": results["news_agent"],
+            "_timings": timings,
+            "_wall_ms": wall,
+        }
 
     async def _run_news_ecosystem(
         self, entities: Entity, user: dict, intent: str = "", query: str = "",
     ) -> dict[str, Any]:
         tickers = list(entities.tickers or [])
         topics = list(entities.topics or []) or ["markets"]
-        res = await self._safe_run(
-            "news_agent",
-            self._news.run(
+        results, timings, wall = await self._run_parallel([
+            ("news_agent", self._news.run(
                 tickers=tickers, topics=topics, user=user, intent=intent, query=query,
-            ),
-        )
-        return res or {}
+            )),
+        ])
+        return {
+            "payload": results["news_agent"] or {},
+            "_timings": timings,
+            "_wall_ms": wall,
+        }
 
     async def _run_report_ecosystem(
         self, entities: Entity, user: dict, intent: str, query: str = "",
@@ -285,14 +327,30 @@ class ValuraOrchestrator:
         elif report_type == "comparison":
             pre = await self._run_market_research_ecosystem(tickers, intent, user, query)
 
-        report_payload = await self._safe_run(
-            "report_generator",
-            self._report.run(report_type, user, tickers or None, fmt),
-        )
+        # Render the report serially after prefetch so timings reflect reality.
+        report_results, report_timings, report_wall = await self._run_parallel([
+            ("report_generator", self._report.run(report_type, user, tickers or None, fmt)),
+        ])
 
-        out: dict[str, Any] = {"report_type": report_type, "report": report_payload or {}}
+        # Merge prefetch + report timings; wall_time_ms is the sum (sequential phases).
+        merged_timings: dict[str, int] = {}
+        merged_wall = 0.0
         if pre:
-            out["prefetch"] = pre
+            merged_timings.update(pre.get("_timings") or {})
+            merged_wall += float(pre.get("_wall_ms") or 0.0)
+        merged_timings.update(report_timings)
+        merged_wall += report_wall
+
+        out: dict[str, Any] = {
+            "report_type": report_type,
+            "report": report_results["report_generator"] or {},
+            "_timings": merged_timings,
+            "_wall_ms": merged_wall,
+        }
+        if pre:
+            # Strip private bookkeeping before exposing prefetch in the result.
+            pre_clean = {k: v for k, v in pre.items() if not k.startswith("_")}
+            out["prefetch"] = pre_clean
         return out
 
     # --- synthesis ----------------------------------------------------------
@@ -477,23 +535,32 @@ class ValuraOrchestrator:
         *,
         implemented: bool = True,
         message: str | None = None,
+        execution_metadata: ExecutionMetadata | None = None,
     ) -> AgentResponse:
+        # Strip private bookkeeping (``_timings``/``_wall_ms``) before the result
+        # ships to the client — those values live on ``execution_metadata`` instead.
+        if isinstance(result, dict):
+            clean = {k: v for k, v in result.items() if not str(k).startswith("_")}
+        else:
+            clean = result
         return AgentResponse(
             agent=agent,
             implemented=implemented,
             intent=intent,
             entities=entities,
-            result=result,
+            result=clean,
             message=message or f"Completed {agent} orchestration.",
+            execution_metadata=execution_metadata,
         )
 
-    async def _safe_run(self, name: str, coro: Awaitable[Any]) -> Any:
+    async def _safe_run(self, name: str, coro: Awaitable[Any]) -> tuple[Any, float]:
+        """Run a coroutine, swallow exceptions, and return (result_or_None, elapsed_ms)."""
         start = time.perf_counter()
         try:
             result = await coro
             duration_ms = (time.perf_counter() - start) * 1000
             logger.info("agent=%s status=success duration=%.0fms", name, duration_ms)
-            return result
+            return result, duration_ms
         except Exception as e:
             duration_ms = (time.perf_counter() - start) * 1000
             logger.error(
@@ -502,7 +569,43 @@ class ValuraOrchestrator:
                 duration_ms,
                 e,
             )
-            return None
+            return None, duration_ms
+
+    async def _run_parallel(
+        self, items: list[tuple[str, Awaitable[Any]]],
+    ) -> tuple[dict[str, Any], dict[str, int], float]:
+        """Fan out named coroutines, capture per-task ms + wall-clock ms.
+
+        Returns ``(results_by_name, timings_by_name_ms, wall_time_ms)``.
+        Wall time is real awaited time (the parallelism win); timings sum
+        gives the sequential estimate.
+        """
+        wall_start = time.perf_counter()
+        gathered = await asyncio.gather(*(self._safe_run(n, c) for n, c in items))
+        wall_ms = (time.perf_counter() - wall_start) * 1000.0
+        results: dict[str, Any] = {}
+        timings: dict[str, int] = {}
+        for (name, _), (res, ms) in zip(items, gathered):
+            results[name] = res
+            timings[name] = round(ms)
+        return results, timings, wall_ms
+
+    @staticmethod
+    def _build_exec_metadata(
+        timings: dict[str, int], wall_ms: float,
+    ) -> ExecutionMetadata:
+        """Pack timings into the ExecutionMetadata that ships to the UI."""
+        agents_ran = list(timings.keys())
+        seq_ms = int(sum(timings.values()))
+        wall = int(round(wall_ms))
+        return ExecutionMetadata(
+            agents_ran=agents_ran,
+            timings=timings,
+            parallel=len(agents_ran) > 1,
+            wall_time_ms=wall,
+            sequential_estimate_ms=seq_ms,
+            saved_ms=max(0, seq_ms - wall),
+        )
 
     # --- helpers ------------------------------------------------------------
 
@@ -564,6 +667,13 @@ class ValuraOrchestrator:
         loc = f" Saved to {path}." if path else ""
         head = f"Generated {rt} report ({fn})."
         return f"{head}{loc}{(' ' + preview) if preview else ''}"
+
+
+def _pop_timings(eco: dict[str, Any]) -> tuple[dict[str, int], float]:
+    """Extract and remove the orchestrator's private timing keys from an ecosystem dict."""
+    timings = eco.pop("_timings", None) or {}
+    wall = float(eco.pop("_wall_ms", 0.0) or 0.0)
+    return timings, wall
 
 
 __all__ = ["ValuraOrchestrator"]
