@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from src.classifier import classify
@@ -72,6 +74,11 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Resolve frontend dir relative to this file so it works regardless of CWD.
+_FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
+if os.path.isdir(_FRONTEND_DIR):
+    app.mount("/static", StaticFiles(directory=_FRONTEND_DIR), name="static")
 
 
 def _sse(event: str, data: str) -> dict[str, str]:
@@ -254,9 +261,49 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
     return EventSourceResponse(event_generator())
 
 
+@app.get("/")
+async def serve_frontend():
+    index_path = os.path.join(_FRONTEND_DIR, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
+    return JSONResponse(
+        {"status": "ok", "service": "valura-ai", "ui": "frontend/index.html missing"}
+    )
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "valura-ai"}
+
+
+@app.get("/users")
+async def list_users() -> dict:
+    """Loads the bundled fixture profiles so the frontend can populate its dropdown without hardcoding."""
+    fixtures_dir = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "fixtures", "users"
+    )
+    out: list[dict] = []
+    if os.path.isdir(fixtures_dir):
+        for name in sorted(os.listdir(fixtures_dir)):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(fixtures_dir, name), encoding="utf-8") as fh:
+                    profile = json.load(fh)
+                out.append(
+                    {
+                        "id": profile.get("user_id") or name.split(".")[0],
+                        "label": (
+                            f"{profile.get('name', name)} — "
+                            f"{profile.get('risk_profile', 'n/a')}, "
+                            f"{len(profile.get('positions') or [])} positions"
+                        ),
+                        "profile": profile,
+                    }
+                )
+            except Exception:
+                logger.exception("failed to load user fixture %s", name)
+    return {"users": out}
 
 
 @app.get("/agents")

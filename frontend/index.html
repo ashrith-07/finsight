@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Valura AI — Multi-Agent Financial Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+  />
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --panel: #141414;
+      --panel-2: #1a1a1a;
+      --border: #2a2a2a;
+      --text: #e6e6e6;
+      --muted: #8a8a8a;
+      --accent: #00d4aa;
+      --accent-dim: rgba(0, 212, 170, 0.18);
+      --green: #34d399;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --grey: #4b5563;
+      --user-bubble: #1f2a37;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      height: 100%;
+    }
+
+    body {
+      display: grid;
+      grid-template-columns: 1fr 380px;
+      gap: 16px;
+      padding: 16px;
+      min-height: 100vh;
+    }
+
+    @media (max-width: 960px) {
+      body { grid-template-columns: 1fr; }
+      .pipeline { order: 2; }
+    }
+
+    /* ---------- Cards ---------- */
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    h1 .accent { color: var(--accent); }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    /* ---------- Chat layout ---------- */
+    .chat {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: 12px;
+      min-height: calc(100vh - 32px);
+    }
+
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    select, button, textarea, input {
+      font: inherit;
+      color: var(--text);
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      outline: none;
+    }
+
+    select { min-width: 240px; }
+    select:focus, textarea:focus, input:focus {
+      border-color: var(--accent);
+    }
+
+    button {
+      cursor: pointer;
+      background: var(--accent);
+      color: #0a0a0a;
+      border: none;
+      font-weight: 600;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.ghost {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .messages {
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 4px;
+    }
+
+    .msg {
+      max-width: 85%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      background: var(--user-bubble);
+      border: 1px solid #243341;
+      border-radius: 12px 12px 4px 12px;
+    }
+
+    .msg.ai {
+      align-self: flex-start;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 12px 12px 12px 4px;
+    }
+
+    .msg.error {
+      align-self: flex-start;
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #ffd9d9;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: var(--accent-dim);
+      border: 1px solid rgba(0, 212, 170, 0.4);
+      border-radius: 999px;
+      padding: 2px 8px;
+      margin-bottom: 6px;
+    }
+
+    .typing-dot {
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      margin-left: 2px;
+      animation: blink 1s infinite;
+    }
+    @keyframes blink {
+      0%, 60%, 100% { opacity: 0.2; }
+      30% { opacity: 1; }
+    }
+
+    .input-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: end;
+    }
+    textarea {
+      resize: none;
+      min-height: 44px;
+      max-height: 160px;
+      width: 100%;
+    }
+
+    .custom-block {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+    }
+    .custom-block.show { display: flex; }
+    .custom-block textarea {
+      min-height: 110px;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 12px;
+    }
+    .hint { color: var(--muted); font-size: 11px; }
+
+    /* ---------- Pipeline ---------- */
+    .pipeline {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 6px 2px;
+    }
+
+    .agent-card {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 4px 10px;
+      align-items: start;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .agent-card.running {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-dim);
+    }
+    .agent-card.done { border-color: var(--green); }
+    .agent-card.error { border-color: var(--red); }
+    .agent-card.stub { opacity: 0.55; }
+
+    .agent-name {
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .agent-desc {
+      grid-column: 1 / -1;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .agent-meta {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 4px;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--grey);
+      align-self: center;
+    }
+    .status-dot.running {
+      background: var(--accent);
+      box-shadow: 0 0 0 0 var(--accent);
+      animation: pulse 1.2s infinite;
+    }
+    .status-dot.done { background: var(--green); }
+    .status-dot.error { background: var(--red); }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.7); }
+      70% { box-shadow: 0 0 0 8px rgba(0, 212, 170, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(0, 212, 170, 0); }
+    }
+
+    .mcp-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 12px;
+    }
+
+    .log-line {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11px;
+      color: var(--muted);
+      padding: 6px 8px;
+      border-left: 2px solid var(--border);
+      margin-bottom: 4px;
+    }
+    .log-line.parallel {
+      color: var(--accent);
+      border-left-color: var(--accent);
+    }
+
+    /* ---------- Scrollbar ---------- */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3a3a3a; }
+  </style>
+</head>
+<body>
+  <!-- ============== LEFT: CHAT ============== -->
+  <main class="chat panel">
+    <div class="header-row">
+      <div>
+        <h1><span class="accent">Valura</span> AI</h1>
+        <div class="subtitle">Multi-Agent Financial Intelligence</div>
+      </div>
+      <div class="toolbar">
+        <select id="userSelect" aria-label="User profile"></select>
+        <button class="ghost" id="customToggle" type="button">Custom</button>
+        <button class="ghost" id="clearBtn" type="button">Clear</button>
+      </div>
+    </div>
+
+    <div class="custom-block" id="customBlock">
+      <div class="hint">Paste a custom user profile JSON (must include <code>user_id</code> and <code>positions</code>).</div>
+      <textarea id="customJson" spellcheck="false" placeholder='{"user_id":"usr_custom","name":"Custom","age":30,"country":"US","base_currency":"USD","kyc":{"status":"verified"},"risk_profile":"moderate","positions":[],"preferences":{}}'></textarea>
+    </div>
+
+    <div class="messages" id="messages" aria-live="polite"></div>
+
+    <div class="input-row">
+      <textarea id="queryInput" rows="1" placeholder="Ask about your portfolio, a stock, risk, news, or request a report..."></textarea>
+      <button id="sendBtn" type="button">Send</button>
+    </div>
+  </main>
+
+  <!-- ============== RIGHT: PIPELINE ============== -->
+  <aside class="pipeline panel">
+    <div>
+      <div class="section-title">Agent Ecosystem</div>
+      <div id="agentCards"></div>
+    </div>
+
+    <div>
+      <div class="section-title">MCP Servers</div>
+      <div id="mcpRows"></div>
+    </div>
+
+    <div>
+      <div class="section-title">Parallel Execution Log</div>
+      <div id="execLog"></div>
+    </div>
+  </aside>
+
+  <script>
+    // ===========================================================
+    // Config + state
+    // ===========================================================
+    const SESSION_ID = 'ui-' + Math.random().toString(36).slice(2, 10);
+    const MAX_MESSAGES = 10;
+    const PRIMARY_AGENTS = ['portfolio_health', 'market_research', 'risk_analysis', 'financial_news', 'report_generator'];
+
+    const PRETTY = {
+      portfolio_health: 'Portfolio Health',
+      market_research: 'Market Research',
+      risk_analysis: 'Risk Analysis',
+      financial_news: 'News',
+      report_generator: 'Reports',
+    };
+
+    const MCP_USAGE = {
+      portfolio_health: ['yfinance_mcp'],
+      market_research: ['yfinance_mcp'],
+      risk_analysis: ['yfinance_mcp'],
+      financial_news: ['web_search_mcp', 'yfinance_mcp'],
+      report_generator: ['report_mcp', 'yfinance_mcp'],
+    };
+
+    let userProfiles = [];
+    const messages = [];
+
+    // ===========================================================
+    // DOM lookups
+    // ===========================================================
+    const userSelect = document.getElementById('userSelect');
+    const customToggle = document.getElementById('customToggle');
+    const customBlock = document.getElementById('customBlock');
+    const customJson = document.getElementById('customJson');
+    const messagesEl = document.getElementById('messages');
+    const queryInput = document.getElementById('queryInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const agentCardsEl = document.getElementById('agentCards');
+    const mcpRowsEl = document.getElementById('mcpRows');
+    const execLogEl = document.getElementById('execLog');
+
+    // ===========================================================
+    // Init
+    // ===========================================================
+    init().catch(err => console.error('init failed', err));
+
+    async function init() {
+      renderAgentCards([]);
+      renderMcpRows();
+      await Promise.all([loadUsers(), loadAgents()]);
+      pushLog('Ready. Pick a profile and send a question.', false);
+    }
+
+    async function loadAgents() {
+      try {
+        const res = await fetch('/agents');
+        const data = await res.json();
+        renderAgentCards(data.agents || []);
+      } catch (e) {
+        renderAgentCards([]);
+      }
+    }
+
+    async function loadUsers() {
+      const fallback = [
+        { id: 'marcus', label: 'Marcus — Concentrated', profile: profileMarcus() },
+        { id: 'alex', label: 'Alex — Aggressive', profile: profileAlex() },
+        { id: 'jamie', label: 'Jamie — New Investor', profile: profileJamie() },
+      ];
+      try {
+        const res = await fetch('/users');
+        const data = await res.json();
+        const fromServer = (data.users || []).filter(u => u.profile && u.profile.user_id);
+        userProfiles = fromServer.length ? fromServer : fallback;
+      } catch (e) {
+        userProfiles = fallback;
+      }
+      userProfiles.push({ id: 'custom', label: 'Custom — paste JSON below', profile: null });
+      userSelect.innerHTML = userProfiles
+        .map((u, i) => `<option value="${i}">${escapeHtml(u.label)}</option>`)
+        .join('');
+      userSelect.addEventListener('change', () => {
+        customBlock.classList.toggle('show', userSelect.value === String(userProfiles.length - 1));
+      });
+    }
+
+    // ===========================================================
+    // Renderers — agent cards / MCP rows
+    // ===========================================================
+    function renderAgentCards(serverAgents) {
+      const seen = new Map();
+      for (const a of serverAgents) seen.set(a.name, a);
+      // Always render the 5 primary cards (in the requested order),
+      // even when /agents is unreachable.
+      const ordered = [
+        ...PRIMARY_AGENTS.map(n => seen.get(n) || { name: n, status: 'implemented' }),
+        ...serverAgents.filter(a => !PRIMARY_AGENTS.includes(a.name)),
+      ];
+      agentCardsEl.innerHTML = ordered
+        .map(a => agentCardHtml(a))
+        .join('');
+    }
+
+    function agentCardHtml(a) {
+      const isStub = a.status === 'stub';
+      const desc = a.description || PRETTY[a.name] || a.name;
+      const parallel = (a.parallel_with || []).join(', ');
+      return `
+        <div class="agent-card ${isStub ? 'stub' : ''}" data-agent="${a.name}">
+          <div class="agent-name">${escapeHtml(PRETTY[a.name] || a.name)}</div>
+          <div class="status-dot" data-status></div>
+          <div class="agent-desc">${escapeHtml(desc)}</div>
+          <div class="agent-meta">
+            <span data-state>${isStub ? 'stub' : 'idle'}</span>
+            <span data-time>—</span>
+            ${parallel ? `<span title="parallel with">∥ ${escapeHtml(parallel)}</span>` : ''}
+          </div>
+        </div>`;
+    }
+
+    function renderMcpRows() {
+      const servers = ['yfinance_mcp', 'web_search_mcp', 'report_mcp'];
+      mcpRowsEl.innerHTML = servers
+        .map(
+          s => `
+          <div class="mcp-row" data-mcp="${s}">
+            <span><span class="status-dot done" style="display:inline-block;margin-right:8px;"></span>${s}</span>
+            <span data-last style="color:var(--muted);font-family:'JetBrains Mono',ui-monospace,monospace;">never</span>
+          </div>`
+        )
+        .join('');
+    }
+
+    function setAgentState(agent, state, ms) {
+      const card = agentCardsEl.querySelector(`[data-agent="${agent}"]`);
+      if (!card) return;
+      card.classList.remove('running', 'done', 'error');
+      const dot = card.querySelector('[data-status]');
+      const stateEl = card.querySelector('[data-state]');
+      const timeEl = card.querySelector('[data-time]');
+      if (state) {
+        card.classList.add(state);
+        dot.classList.remove('running', 'done', 'error');
+        dot.classList.add(state);
+        stateEl.textContent = state;
+      }
+      if (typeof ms === 'number') {
+        timeEl.textContent = ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
+      }
+    }
+
+    function resetAgentStates() {
+      for (const card of agentCardsEl.querySelectorAll('.agent-card')) {
+        if (card.classList.contains('stub')) continue;
+        card.classList.remove('running', 'done', 'error');
+        const dot = card.querySelector('[data-status]');
+        if (dot) dot.classList.remove('running', 'done', 'error');
+        const stateEl = card.querySelector('[data-state]');
+        if (stateEl) stateEl.textContent = 'idle';
+      }
+    }
+
+    function bumpMcpServers(serverIds) {
+      const ts = nowHms();
+      for (const id of new Set(serverIds)) {
+        const row = mcpRowsEl.querySelector(`[data-mcp="${id}"] [data-last]`);
+        if (row) row.textContent = ts;
+      }
+    }
+
+    function pushLog(text, parallel) {
+      const div = document.createElement('div');
+      div.className = 'log-line' + (parallel ? ' parallel' : '');
+      div.textContent = `[${nowHms()}] ${text}`;
+      execLogEl.prepend(div);
+      while (execLogEl.children.length > 12) execLogEl.removeChild(execLogEl.lastChild);
+    }
+
+    // ===========================================================
+    // Renderers — chat
+    // ===========================================================
+    function appendUserMessage(text) {
+      const el = document.createElement('div');
+      el.className = 'msg user';
+      el.textContent = text;
+      messagesEl.appendChild(el);
+      trimHistory();
+      scrollChat();
+    }
+
+    function appendAiMessage() {
+      const el = document.createElement('div');
+      el.className = 'msg ai';
+      el.innerHTML = `<div class="badge" data-badge>thinking</div><span data-body></span><span class="typing-dot" data-dot></span>`;
+      messagesEl.appendChild(el);
+      trimHistory();
+      scrollChat();
+      return el;
+    }
+
+    function appendErrorMessage(text) {
+      const el = document.createElement('div');
+      el.className = 'msg error';
+      el.textContent = text;
+      messagesEl.appendChild(el);
+      trimHistory();
+      scrollChat();
+    }
+
+    function trimHistory() {
+      while (messagesEl.children.length > MAX_MESSAGES * 2) {
+        messagesEl.removeChild(messagesEl.firstChild);
+      }
+    }
+
+    function scrollChat() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    // ===========================================================
+    // Send + SSE parsing
+    // ===========================================================
+    sendBtn.addEventListener('click', sendQuery);
+    clearBtn.addEventListener('click', () => {
+      messagesEl.innerHTML = '';
+      execLogEl.innerHTML = '';
+      resetAgentStates();
+    });
+    customToggle.addEventListener('click', () => {
+      customBlock.classList.toggle('show');
+    });
+    queryInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendQuery();
+      }
+    });
+
+    function pickUserProfile() {
+      const idx = parseInt(userSelect.value, 10);
+      const u = userProfiles[idx];
+      if (!u || !u.profile) {
+        try {
+          const parsed = JSON.parse(customJson.value || '{}');
+          if (!parsed.user_id) throw new Error('user_id required');
+          return parsed;
+        } catch (e) {
+          throw new Error('Invalid custom profile JSON: ' + e.message);
+        }
+      }
+      return u.profile;
+    }
+
+    async function sendQuery() {
+      const query = queryInput.value.trim();
+      if (!query || sendBtn.disabled) return;
+
+      let profile;
+      try {
+        profile = pickUserProfile();
+      } catch (e) {
+        appendErrorMessage(e.message);
+        return;
+      }
+
+      appendUserMessage(query);
+      queryInput.value = '';
+      const aiBubble = appendAiMessage();
+      const bodyEl = aiBubble.querySelector('[data-body]');
+      const badgeEl = aiBubble.querySelector('[data-badge]');
+      const dotEl = aiBubble.querySelector('[data-dot]');
+
+      sendBtn.disabled = true;
+      resetAgentStates();
+      const reqStart = performance.now();
+
+      try {
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          body: JSON.stringify({ query, session_id: SESSION_ID, user: profile }),
+        });
+        if (!res.ok || !res.body) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        await consumeSse(res.body, {
+          onDelta: (chunk) => {
+            bodyEl.textContent += chunk;
+            scrollChat();
+          },
+          onResult: (jsonStr) => handleResult(jsonStr, aiBubble, badgeEl, reqStart),
+          onError: (jsonStr) => {
+            const parsed = safeJson(jsonStr);
+            const m = (parsed && parsed.message) || jsonStr || 'unknown error';
+            appendErrorMessage(m);
+          },
+          onDone: () => {
+            dotEl.remove();
+          },
+        });
+      } catch (e) {
+        appendErrorMessage('Network error: ' + e.message);
+        dotEl.remove();
+      } finally {
+        sendBtn.disabled = false;
+        resetAgentStates();
+      }
+    }
+
+    /**
+     * Parse a stream of SSE-style frames separated by blank lines.
+     * Each frame contains `event:` and `data:` lines per the SSE spec.
+     */
+    async function consumeSse(stream, handlers) {
+      const reader = stream.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        let sep;
+        while ((sep = buffer.indexOf('\n\n')) >= 0) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          handleFrame(frame, handlers);
+        }
+      }
+      if (buffer.trim()) handleFrame(buffer, handlers);
+    }
+
+    function handleFrame(frame, h) {
+      let event = 'message';
+      const dataLines = [];
+      for (const raw of frame.split('\n')) {
+        const line = raw.replace(/\r$/, '');
+        if (!line || line.startsWith(':')) continue;
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+      }
+      const data = dataLines.join('\n');
+      if (event === 'delta' && h.onDelta) h.onDelta(data);
+      else if (event === 'result' && h.onResult) h.onResult(data);
+      else if (event === 'error' && h.onError) h.onError(data);
+      else if (event === 'done' && h.onDone) h.onDone();
+    }
+
+    function handleResult(jsonStr, aiBubble, badgeEl, reqStart) {
+      const parsed = safeJson(jsonStr);
+      if (!parsed) return;
+
+      const elapsedMs = Math.round(performance.now() - reqStart);
+      const primary = parsed.agent || 'general_query';
+      badgeEl.textContent = (PRETTY[primary] || primary).replace('_', ' ');
+
+      const ran = inferAgentsRan(parsed);
+      // Per-agent timing isn't streamed; share request elapsed across siblings as a UX cue.
+      const perAgent = ran.length ? Math.round(elapsedMs / ran.length) : elapsedMs;
+      for (const a of ran) setAgentState(a, 'done', perAgent);
+
+      const mcpHit = new Set();
+      for (const a of ran) for (const m of MCP_USAGE[a] || []) mcpHit.add(m);
+      bumpMcpServers([...mcpHit]);
+
+      if (ran.length > 1) {
+        pushLog(`${ran.join(' + ')} ran in parallel (${(elapsedMs / 1000).toFixed(2)}s)`, true);
+      } else {
+        pushLog(`${ran[0] || primary} completed in ${(elapsedMs / 1000).toFixed(2)}s`, false);
+      }
+    }
+
+    /**
+     * Detect which agents executed by inspecting the orchestrator's nested result keys.
+     * Falls back to ``parsed.agent`` for stubs / single-agent paths.
+     */
+    function inferAgentsRan(parsed) {
+      const ran = new Set();
+      const r = parsed.result || {};
+      if (r && typeof r === 'object') {
+        if (r.portfolio_health) ran.add('portfolio_health');
+        if (r.risk_analysis) ran.add('risk_analysis');
+        if (r.market_research) ran.add('market_research');
+        if (r.market_news) ran.add('financial_news');
+        if (r.report || parsed.agent === 'report_generator') ran.add('report_generator');
+      }
+      if (!ran.size && parsed.agent && PRIMARY_AGENTS.includes(parsed.agent)) {
+        ran.add(parsed.agent);
+      }
+      return [...ran];
+    }
+
+    // ===========================================================
+    // Helpers
+    // ===========================================================
+    function safeJson(s) {
+      try { return JSON.parse(s); } catch { return null; }
+    }
+
+    function escapeHtml(s) {
+      return String(s == null ? '' : s).replace(
+        /[&<>"']/g,
+        c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])
+      );
+    }
+
+    function nowHms() {
+      const d = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    // ===========================================================
+    // Hardcoded fallback profiles (used only if /users 404s)
+    // ===========================================================
+    function profileMarcus() {
+      return {
+        user_id: 'usr_003', name: 'Marcus Webb', age: 35, country: 'US',
+        base_currency: 'USD', kyc: { status: 'verified' }, risk_profile: 'moderate',
+        positions: [
+          { ticker: 'NVDA', exchange: 'NASDAQ', quantity: 180, avg_cost: 218.40, currency: 'USD', purchased_at: '2023-04-12' },
+          { ticker: 'AAPL', exchange: 'NASDAQ', quantity: 8, avg_cost: 168.20, currency: 'USD', purchased_at: '2024-05-20' },
+        ],
+        preferences: { preferred_benchmark: 'S&P 500' },
+      };
+    }
+    function profileAlex() {
+      return {
+        user_id: 'usr_001', name: 'Alex Chen', age: 28, country: 'US',
+        base_currency: 'USD', kyc: { status: 'verified' }, risk_profile: 'aggressive',
+        positions: [
+          { ticker: 'AAPL', exchange: 'NASDAQ', quantity: 60, avg_cost: 142.30, currency: 'USD', purchased_at: '2023-08-04' },
+          { ticker: 'NVDA', exchange: 'NASDAQ', quantity: 35, avg_cost: 412.85, currency: 'USD', purchased_at: '2023-11-15' },
+        ],
+        preferences: { preferred_benchmark: 'QQQ' },
+      };
+    }
+    function profileJamie() {
+      return {
+        user_id: 'usr_004', name: 'Jamie Patel', age: 31, country: 'US',
+        base_currency: 'USD', kyc: { status: 'verified' }, risk_profile: 'moderate',
+        positions: [],
+        preferences: { preferred_benchmark: 'S&P 500' },
+      };
+    }
+  </script>
+</body>
+</html>
