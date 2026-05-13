@@ -13,10 +13,13 @@ import re
 from typing import Any
 
 import yfinance as yf
+from agno.agent import Agent
 from pydantic import BaseModel
 
+from src.agents.agno_react import coerce_pydantic
+from src.llm.agno_model import get_agno_model
 from src.llm.base import LLMClient
-from src.mcp import yfinance_mcp
+from src.mcp import web_search_mcp, yfinance_mcp
 from src.models import (
     CompanyInfo,
     MarketResearchResult,
@@ -102,6 +105,52 @@ class MarketResearchAgent:
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
         self._yf = yfinance_mcp
+        self._agno_react_checked = False
+        self._agno_react: Agent | None = None
+
+    def _ensure_agno_react(self) -> Agent | None:
+        if self._agno_react_checked:
+            return self._agno_react
+        self._agno_react_checked = True
+        model = get_agno_model()
+        if model is None:
+            self._agno_react = None
+            return None
+        try:
+            self._agno_react = Agent(
+                name="Market Research Analyst",
+                model=model,
+                tools=[yfinance_mcp, web_search_mcp],
+                instructions=[
+                    "You are an expert market research analyst for Valura AI.",
+                    "Fetch both price snapshot and company fundamentals for every ticker.",
+                    "If multiple tickers, compare them side by side.",
+                    "Always include 52-week high and low with distance from current price.",
+                    "Search for recent news about the company.",
+                    "Surface the most important metric for an investor to know.",
+                ],
+                output_schema=MarketResearchResult,
+                structured_outputs=True,
+                markdown=False,
+                debug_mode=True,
+            )
+        except Exception as e:
+            logger.warning("Market Agno Agent construction failed: %s", e)
+            self._agno_react = None
+        return self._agno_react
+
+    def _build_research_context(self, tickers: list[str], intent: str, query: str) -> str:
+        sub = self._detect_sub_intent(intent, query, len(tickers))
+        lines = [
+            f"Tickers: {', '.join(tickers)}",
+            f"Classifier intent: {intent or '(none)'}",
+            f"User query: {query or '(none)'}",
+            f"Detected sub-task: {sub}",
+            "",
+            "Use tools to pull live data and news, then return a complete MarketResearchResult "
+            "matching the output schema (including disclaimer).",
+        ]
+        return "\n".join(lines)
 
     @staticmethod
     def _detect_sub_intent(intent: str, query: str, ticker_count: int) -> str:
@@ -117,6 +166,24 @@ class MarketResearchAgent:
         if not clean:
             return self._no_ticker_response(intent)
 
+        react = self._ensure_agno_react()
+        if react is not None:
+            try:
+                ctx = self._build_research_context(clean, intent, query)
+                resp = await react.arun(ctx, stream=False)
+                parsed = coerce_pydantic(resp, MarketResearchResult)
+                if parsed is not None:
+                    return parsed
+            except Exception as e:
+                logger.error("Market Agno react error: %s", e)
+        return await self._run_legacy(clean, intent, query)
+
+    async def _run_legacy(
+        self,
+        clean: list[str],
+        intent: str,
+        query: str,
+    ) -> MarketResearchResult:
         sub = self._detect_sub_intent(intent, query, len(clean))
         if sub == "price_check":
             return await self._price_check(clean)
@@ -126,8 +193,6 @@ class MarketResearchAgent:
             return await self._technical_levels(clean)
         if sub == "options_activity":
             return await self._options_activity(clean)
-        # full_research and comparison both use the rich pipeline; comparison is
-        # already auto-triggered by ``_generate_comparison`` when ``len >= 2``.
         return await self._full_research(clean, intent, sub)
 
     # -------------------- default: full research --------------------

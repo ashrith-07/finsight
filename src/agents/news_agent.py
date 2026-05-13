@@ -13,16 +13,30 @@ from typing import Any
 
 from agno.agent import Agent
 
+from src.agents.agno_react import coerce_json_dict
+from src.llm.agno_model import get_agno_model
 from src.llm.base import LLMClient
 from src.mcp import web_search_mcp, yfinance_mcp
 
 logger = logging.getLogger(__name__)
 
-INSTRUCTIONS = (
-    "You are a financial news synthesiser. Use web-search tools for headlines and "
-    "yfinance tools to ground company context. Prefer specific numbers, name "
-    "companies explicitly, and surface the 1–2 stories that actually move the thesis."
-)
+NEWS_REACT_INSTRUCTIONS = [
+    "You are a Financial News Analyst for Valura AI.",
+    "Search for news about each ticker mentioned.",
+    "Search for broad market news even when tickers are present.",
+    "Score each headline as positive, negative, or neutral.",
+    "Deduplicate similar stories before returning.",
+    "Summarise what matters most for an investor in at most three sentences in the summary field.",
+    "Return ONE minified JSON object with keys: sub_intent, tickers, topics, articles (list of "
+    "dicts with title, url, sentiment, source), sentiment_counts, summary, total_results, "
+    "and optional user_context.",
+]
+
+
+def _news_agno_payload_ok(d: dict[str, Any]) -> bool:
+    arts = d.get("articles")
+    summ = d.get("summary")
+    return isinstance(arts, list) and len(arts) > 0 and isinstance(summ, str) and summ.strip() != ""
 
 POSITIVE_KEYWORDS = frozenset(
     {
@@ -102,25 +116,59 @@ class FinancialNewsAgent:
         self._llm = llm
         self._search = web_search_mcp
         self._yf = yfinance_mcp
-        self._agno: Agent | None = None
+        self._agno_react_checked = False
+        self._agno_react: Agent | None = None
+
+    def _ensure_agno_react(self) -> Agent | None:
+        if self._agno_react_checked:
+            return self._agno_react
+        self._agno_react_checked = True
+        model = get_agno_model()
+        if model is None:
+            self._agno_react = None
+            return None
+        try:
+            self._agno_react = Agent(
+                name="Financial News Analyst",
+                model=model,
+                tools=[web_search_mcp, yfinance_mcp],
+                instructions=NEWS_REACT_INSTRUCTIONS,
+                markdown=False,
+                debug_mode=True,
+            )
+        except Exception as e:
+            logger.warning("News Agno Agent construction failed: %s", e)
+            self._agno_react = None
+        return self._agno_react
+
+    def _build_news_context(
+        self,
+        tickers: list[str],
+        topics: list[str],
+        user: dict,
+        intent: str,
+        query: str,
+        sub: str,
+    ) -> str:
+        return "\n".join([
+            f"Detected sub-task: {sub}",
+            f"Tickers: {', '.join(tickers) if tickers else '(none)'}",
+            f"Topics: {', '.join(topics) if topics else '(none)'}",
+            f"Classifier intent: {intent or '(none)'}",
+            f"User query: {query or '(none)'}",
+            f"User: {user.get('name')} — risk profile {user.get('risk_profile')}",
+            "",
+            "Use tools, then output the JSON digest described in your instructions.",
+        ])
 
     # ---------- Agno surface ----------
     def as_agno_agent(self) -> Agent:
-        """Lazily build an Agno agent so this capability can also be invoked tool-style."""
-        if self._agno is None:
-            try:
-                from src.llm.agno_model import get_agno_model
-
-                self._agno = Agent(
-                    name="financial_news",
-                    model=get_agno_model(),
-                    tools=[self._search, self._yf],
-                    instructions=INSTRUCTIONS,
-                )
-            except Exception as e:
-                logger.warning("Agno agent construction failed for financial_news: %s", e)
-                raise
-        return self._agno
+        ag = self._ensure_agno_react()
+        if ag is None:
+            raise RuntimeError(
+                "FinancialNewsAgent.as_agno_agent requires OPENAI_API_KEY or GROQ_API_KEY."
+            )
+        return ag
 
     @staticmethod
     def _detect_sub_intent(intent: str, query: str, ticker_count: int) -> str:
@@ -138,6 +186,19 @@ class FinancialNewsAgent:
         clean_tickers = self._normalise_tickers(tickers)
         clean_topics = [t.strip() for t in (topics or []) if str(t or "").strip()]
         sub = self._detect_sub_intent(intent, query, len(clean_tickers))
+
+        react = self._ensure_agno_react()
+        if react is not None:
+            try:
+                ctx = self._build_news_context(
+                    clean_tickers, clean_topics, user, intent, query, sub,
+                )
+                resp = await react.arun(ctx, stream=False)
+                d = coerce_json_dict(resp)
+                if d and _news_agno_payload_ok(d):
+                    return d
+            except Exception as e:
+                logger.error("News Agno react error: %s", e)
 
         if sub == "sector_news":
             sectors = clean_topics or _DEFAULT_SECTORS

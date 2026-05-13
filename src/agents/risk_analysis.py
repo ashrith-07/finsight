@@ -18,8 +18,10 @@ import yfinance as yf
 from agno.agent import Agent
 from pydantic import BaseModel
 
+from src.agents.agno_react import coerce_json_dict
+from src.llm.agno_model import get_agno_model
 from src.llm.base import LLMClient
-from src.mcp import web_search_mcp, yfinance_mcp
+from src.mcp import calculator_mcp, portfolio_analytics_mcp, yfinance_mcp
 from src.models import Observation
 
 logger = logging.getLogger(__name__)
@@ -30,12 +32,23 @@ DISCLAIMER = (
     "particularly in regime shifts. Not investment advice."
 )
 
-INSTRUCTIONS = (
-    "You are a portfolio risk analyst. Use the yfinance tools to pull historical "
-    "prices and the web-search tools to corroborate any unusual signal. Always "
-    "anchor commentary to specific numbers (VaR, drawdown, Sharpe, correlation) "
-    "and keep the audience as a non-specialist investor."
-)
+RISK_REACT_INSTRUCTIONS = [
+    "You are a Portfolio Risk Analyst for Valura AI.",
+    "Always fetch roughly one year of historical prices (via tools) before estimating VaR.",
+    "Run all five stress-test scenarios: 2008 financial crisis, 2020 COVID crash, 2022 rate hikes, dot-com bubble, and a mild correction.",
+    "Flag any pairwise position correlation above 0.7 as dangerous.",
+    "Compute Sharpe ratio when possible and explain it in plain language.",
+    "Report VaR at both 95% and 99% confidence (1-day) when portfolio metrics are computed.",
+    "Use tools to pull data; never invent prices or returns.",
+]
+
+
+def _risk_agno_payload_ok(d: dict[str, Any]) -> bool:
+    if not isinstance(d, dict) or d.get("error"):
+        return False
+    if not d.get("disclaimer"):
+        return False
+    return "portfolio_value" in d or "metrics" in d
 
 
 class _ObsList(BaseModel):
@@ -167,26 +180,67 @@ class RiskAnalysisAgent:
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
         self._yf = yfinance_mcp
-        self._search = web_search_mcp
-        self._agno: Agent | None = None
+        self._agno_react_checked = False
+        self._agno_react: Agent | None = None
+
+    def _ensure_agno_react(self) -> Agent | None:
+        if self._agno_react_checked:
+            return self._agno_react
+        self._agno_react_checked = True
+        model = get_agno_model()
+        if model is None:
+            self._agno_react = None
+            return None
+        try:
+            self._agno_react = Agent(
+                name="Portfolio Risk Analyst",
+                model=model,
+                tools=[yfinance_mcp, portfolio_analytics_mcp, calculator_mcp],
+                instructions=RISK_REACT_INSTRUCTIONS,
+                markdown=False,
+                debug_mode=True,
+            )
+        except Exception as e:
+            logger.warning("Risk Agno Agent construction failed: %s", e)
+            self._agno_react = None
+        return self._agno_react
+
+    def _build_risk_context(self, user: dict, intent: str, query: str) -> str:
+        sub = self._detect_sub_intent(intent, query)
+        positions = user.get("positions") or []
+        lines = [
+            f"Investor: {user.get('name') or 'Unknown'}",
+            f"Base currency: {user.get('base_currency') or 'USD'}",
+            f"Classifier intent: {intent or '(none)'}",
+            f"User query: {query or '(none)'}",
+            f"Detected sub-task: {sub}",
+            "",
+            "Positions (ticker, qty, avg_cost):",
+        ]
+        if not positions:
+            lines.append("  (none)")
+        else:
+            for p in positions[:40]:
+                lines.append(
+                    f"  - {p.get('ticker')}: qty={p.get('quantity')} avg_cost={p.get('avg_cost')}"
+                )
+        lines.append(
+            "\nUse tools to build risk metrics, then respond with ONE minified JSON object "
+            "matching the shape produced by Valura's risk engine: include disclaimer (string), "
+            "currency, portfolio_value, and either metrics (full book) or focused keys "
+            "(var, stress_tests, significant_correlations, etc.) plus observations as "
+            "list of {severity, text} objects and sub_intent."
+        )
+        return "\n".join(lines)
 
     # ---------- Agno surface ----------
     def as_agno_agent(self) -> Agent:
-        """Lazily build an Agno agent that exposes the same MCP tools to a tool-calling LLM."""
-        if self._agno is None:
-            try:
-                from src.llm.agno_model import get_agno_model
-
-                self._agno = Agent(
-                    name="risk_analysis",
-                    model=get_agno_model(),
-                    tools=[self._yf, self._search],
-                    instructions=INSTRUCTIONS,
-                )
-            except Exception as e:
-                logger.warning("Agno agent construction failed for risk_analysis: %s", e)
-                raise
-        return self._agno
+        ag = self._ensure_agno_react()
+        if ag is None:
+            raise RuntimeError(
+                "RiskAnalysisAgent.as_agno_agent requires OPENAI_API_KEY or GROQ_API_KEY."
+            )
+        return ag
 
     @staticmethod
     def _detect_sub_intent(intent: str, query: str) -> str:
@@ -204,6 +258,17 @@ class RiskAnalysisAgent:
 
         if not positions:
             return self._empty_result(currency, reason="no positions on file")
+
+        react = self._ensure_agno_react()
+        if react is not None:
+            try:
+                ctx = self._build_risk_context(user, intent, query)
+                resp = await react.arun(ctx, stream=False)
+                d = coerce_json_dict(resp)
+                if d and _risk_agno_payload_ok(d):
+                    return d
+            except Exception as e:
+                logger.error("Risk Agno react error: %s", e)
 
         sub = self._detect_sub_intent(intent, query)
 

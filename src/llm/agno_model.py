@@ -6,7 +6,7 @@ Imports stay lazy so test runs that only use ``MockLLMClient`` avoid loading Agn
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Optional
 
 
 def _openai_id_default() -> str:
@@ -24,8 +24,8 @@ def _groq_id_default() -> str:
     return mid
 
 
-def get_agno_model() -> Any:
-    """Agno model for member agents. Priority: OpenAI key → Groq key → OpenAIChat (no key)."""
+def get_agno_model() -> Optional[Any]:
+    """Agno model for member agents. Priority: OpenAI key → Groq key; ``None`` if neither is set."""
     if os.environ.get("OPENAI_API_KEY", "").strip():
         from agno.models.openai import OpenAIChat
 
@@ -34,13 +34,11 @@ def get_agno_model() -> Any:
         from agno.models.groq import Groq
 
         return Groq(id=_groq_id_default())
-    from agno.models.openai import OpenAIChat
-
-    return OpenAIChat(id=_openai_id_default(), api_key="")
+    return None
 
 
-def get_agno_model_strong() -> Any:
-    """Stronger model for ``Team`` coordination. Falls back to ``get_agno_model()`` with no keys."""
+def get_agno_model_strong() -> Optional[Any]:
+    """Stronger model for ``Team`` coordination; ``None`` when no provider key is configured."""
     if os.environ.get("OPENAI_API_KEY", "").strip():
         from agno.models.openai import OpenAIChat
 
@@ -49,10 +47,10 @@ def get_agno_model_strong() -> Any:
         from agno.models.groq import Groq
 
         return Groq(id="llama-3.3-70b-versatile")
-    return get_agno_model()
+    return None
 
 
-def make_agno_model() -> Any:
+def make_agno_model() -> Optional[Any]:
     """Backward-compatible alias for code paths that still import ``make_agno_model``."""
     return get_agno_model()
 

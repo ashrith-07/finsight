@@ -16,11 +16,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import yfinance as yf
+from agno.agent import Agent
 from pydantic import BaseModel
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from src.agents.agno_react import coerce_pydantic
+from src.llm.agno_model import get_agno_model
 from src.llm.base import LLMClient
-from src.mcp import calculator_mcp, portfolio_analytics_mcp
+from src.mcp import calculator_mcp, portfolio_analytics_mcp, yfinance_mcp
 from src.models import (
     BenchmarkComparison,
     ConcentrationRisk,
@@ -628,10 +631,78 @@ async def _generate_observations(
 class PortfolioHealthAgent:
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
+        self._agno_react_checked = False
+        self._agno_react: Agent | None = None
 
     @staticmethod
     def _detect_sub_intent(intent: str, query: str) -> str:
         return _detect_sub_intent(intent, query)
+
+    def _ensure_agno_react(self) -> Agent | None:
+        if self._agno_react_checked:
+            return self._agno_react
+        self._agno_react_checked = True
+        model = get_agno_model()
+        if model is None:
+            self._agno_react = None
+            return None
+        try:
+            self._agno_react = Agent(
+                name="Portfolio Health Analyst",
+                model=model,
+                tools=[yfinance_mcp, portfolio_analytics_mcp, calculator_mcp],
+                instructions=[
+                    "You are an expert portfolio health analyst for Valura AI.",
+                    "Always fetch live prices before computing any metrics.",
+                    "Always compute concentration risk — flag anything above 40% as high risk.",
+                    "Always compare portfolio return against the user's preferred benchmark.",
+                    "Always include the regulatory disclaimer in every response.",
+                    "Surface the 1–2 most important insights, not every metric.",
+                    "Use plain language — your audience may not be finance experts.",
+                    "For empty portfolios return build guidance based on age and risk profile.",
+                ],
+                output_schema=PortfolioHealthResult,
+                structured_outputs=True,
+                markdown=False,
+                debug_mode=True,
+            )
+        except Exception as e:
+            logger.warning("Portfolio Agno Agent construction failed: %s", e)
+            self._agno_react = None
+        return self._agno_react
+
+    def _build_user_context(self, user: dict, intent: str, query: str) -> str:
+        p = _parse_profile(user)
+        sub = self._detect_sub_intent(intent, query)
+        bench = _benchmark_preference(p.preferences)
+        lines = [
+            f"Analyse portfolio health for {p.name or 'the investor'} "
+            f"(age {p.age or 'unknown'}, {p.risk_profile} risk profile).",
+            "",
+            f"Classifier intent: {intent or '(none)'}",
+            f"User query: {query or '(none)'}",
+            f"Detected sub-task: {sub}",
+            "",
+            "Current positions:",
+        ]
+        if not p.positions:
+            lines.append("  (none — empty book)")
+        else:
+            for pos in p.positions:
+                t = str(pos.get("ticker") or "")
+                q = pos.get("quantity", "")
+                ac = pos.get("avg_cost", "")
+                dt = pos.get("purchased_at", "")
+                lines.append(f"  - {t}: {q} shares, avg cost {ac}, bought {dt}")
+        lines.extend([
+            "",
+            f"Preferred benchmark: {bench}",
+            f"Base currency: {p.base_currency}",
+            "",
+            "Fetch live prices via tools, compute concentration and performance vs benchmark, "
+            "and return a complete PortfolioHealthResult matching the output schema.",
+        ])
+        return "\n".join(lines)
 
     async def run(
         self,
@@ -639,8 +710,25 @@ class PortfolioHealthAgent:
         intent: str = "",
         query: str = "",
     ) -> PortfolioHealthResult:
-        """Sub-intent dispatcher. ``intent``/``query`` default to '' so legacy callers
-        (and tests) keep getting the full health check."""
+        react = self._ensure_agno_react()
+        if react is not None:
+            try:
+                ctx = self._build_user_context(user, intent, query)
+                resp = await react.arun(ctx, stream=False)
+                parsed = coerce_pydantic(resp, PortfolioHealthResult)
+                if parsed is not None:
+                    return parsed
+            except Exception as e:
+                logger.error("Portfolio Agno react error: %s", e)
+        return await self._run_legacy(user, intent, query)
+
+    async def _run_legacy(
+        self,
+        user: dict,
+        intent: str = "",
+        query: str = "",
+    ) -> PortfolioHealthResult:
+        """Sub-intent dispatcher used when no API key is configured or structured Agno output failed."""
         sub = self._detect_sub_intent(intent, query)
         if sub == "concentration_only":
             return await self._concentration_analysis(user)

@@ -59,34 +59,44 @@ class ValuraOrchestrator:
         self._team: Team | None = None
         self._meta_agent: Agent | None = None
 
-    def _ensure_team(self) -> Team:
+    def _ensure_team(self) -> Team | None:
         if self._team is None:
             from src.llm.agno_model import get_agno_model_strong
 
-            self._team = Team(
-                name="valura_team",
-                model=get_agno_model_strong(),
-                members=[
-                    self._risk.as_agno_agent(),
-                    self._news.as_agno_agent(),
-                    self._report.as_agno_agent(),
-                ],
-                instructions=(
-                    "You coordinate risk analytics, live news, and report rendering for Valura. "
-                    "Delegate specialised work to members; never contradict numerical outputs "
-                    "computed by tools."
-                ),
-            )
+            model = get_agno_model_strong()
+            if model is None:
+                return None
+            try:
+                self._team = Team(
+                    name="valura_team",
+                    model=model,
+                    members=[
+                        self._risk.as_agno_agent(),
+                        self._news.as_agno_agent(),
+                        self._report.as_agno_agent(),
+                    ],
+                    instructions=(
+                        "You coordinate risk analytics, live news, and report rendering for Valura. "
+                        "Delegate specialised work to members; never contradict numerical outputs "
+                        "computed by tools."
+                    ),
+                )
+            except Exception as e:
+                logger.warning("Agno Team initialisation skipped: %s", e)
+                return None
         return self._team
 
-    def _ensure_meta_agent(self) -> Agent:
-        """Thin Agno shell used as the orchestrator's framework anchor (dispatch stays imperative)."""
+    def _ensure_meta_agent(self) -> Agent | None:
+        """Thin Agno shell for tooling compatibility; omitted when no LLM API key is configured."""
         if self._meta_agent is None:
             from src.llm.agno_model import get_agno_model
 
+            model = get_agno_model()
+            if model is None:
+                return None
             self._meta_agent = Agent(
                 name="valura_orchestrator",
-                model=get_agno_model(),
+                model=model,
                 tools=[],
                 instructions=(
                     "You are the Valura orchestrator meta-agent. Runtime routing is handled in "

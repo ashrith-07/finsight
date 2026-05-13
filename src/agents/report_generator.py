@@ -3,22 +3,38 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from typing import Any
 
 from agno.agent import Agent
 
 from src.agents.news_agent import FinancialNewsAgent
 from src.agents.risk_analysis import RiskAnalysisAgent
+from src.agents.agno_react import coerce_json_dict
+from src.llm.agno_model import get_agno_model
 from src.llm.base import LLMClient
-from src.mcp import report_mcp, web_search_mcp, yfinance_mcp
+from src.mcp import portfolio_analytics_mcp, report_mcp, web_search_mcp, yfinance_mcp
 
 logger = logging.getLogger(__name__)
 
-INSTRUCTIONS = (
-    "You are a report generator. Use the report tools to render Markdown or PDF "
-    "artefacts from structured data. Always include the disclaimer section and "
-    "never fabricate numbers — render only what was supplied."
-)
+REPORT_REACT_INSTRUCTIONS = [
+    "You are a Financial Report Generator for Valura AI.",
+    "Generate comprehensive reports with all available data from tools.",
+    "Always include an executive summary section first.",
+    "Include a data table for all positions or tickers.",
+    "Always end with the regulatory disclaimer.",
+    "Default format is markdown unless the user explicitly requests PDF.",
+    "Return the tool result object from the report generator tools (file_path, content, format).",
+]
+
+
+def _report_agno_payload_ok(d: dict[str, Any]) -> bool:
+    if not isinstance(d, dict) or not d.get("format"):
+        return False
+    if d.get("error") and not d.get("file_path") and not d.get("content"):
+        return False
+    return bool(d.get("file_path") or d.get("content"))
 
 
 class ReportGeneratorAgent:
@@ -29,28 +45,81 @@ class ReportGeneratorAgent:
         self._report = report_mcp
         self._yf = yfinance_mcp
         self._search = web_search_mcp
-        self._agno: Agent | None = None
+        self._agno_react_checked = False
+        self._agno_react: Agent | None = None
+
+    def _ensure_agno_react(self) -> Agent | None:
+        if self._agno_react_checked:
+            return self._agno_react
+        self._agno_react_checked = True
+        model = get_agno_model()
+        if model is None:
+            self._agno_react = None
+            return None
+        try:
+            self._agno_react = Agent(
+                name="Financial Report Generator",
+                model=model,
+                tools=[report_mcp, yfinance_mcp, portfolio_analytics_mcp],
+                instructions=REPORT_REACT_INSTRUCTIONS,
+                markdown=False,
+                debug_mode=True,
+            )
+        except Exception as e:
+            logger.warning("Report Agno Agent construction failed: %s", e)
+            self._agno_react = None
+        return self._agno_react
+
+    def _build_report_agno_prompt(
+        self,
+        report_type: str,
+        user: dict,
+        tickers: list[str] | None,
+        format: str,
+    ) -> str:
+        rt = (report_type or "").strip().lower()
+        tlist = ", ".join(tickers or []) or "(none)"
+        pos_blob = json.dumps(user.get("positions") or [], default=str)[:6000]
+        return "\n".join([
+            f"report_type: {rt}",
+            f"output_format: {format}",
+            f"tickers: {tlist}",
+            f"user_name: {user.get('name')}",
+            f"positions_json: {pos_blob}",
+            "",
+            "Call report tools as needed to produce the artefact; return the final dict with file_path/content.",
+        ])
 
     # ---------- Agno surface ----------
     def as_agno_agent(self) -> Agent:
-        """Lazily build an Agno agent that can call the report tools directly."""
-        if self._agno is None:
-            try:
-                from src.llm.agno_model import get_agno_model
-
-                self._agno = Agent(
-                    name="report_generator",
-                    model=get_agno_model(),
-                    tools=[self._report, self._yf],
-                    instructions=INSTRUCTIONS,
-                )
-            except Exception as e:
-                logger.warning("Agno agent construction failed for report_generator: %s", e)
-                raise
-        return self._agno
+        ag = self._ensure_agno_react()
+        if ag is None:
+            raise RuntimeError(
+                "ReportGeneratorAgent.as_agno_agent requires OPENAI_API_KEY or GROQ_API_KEY."
+            )
+        return ag
 
     # ---------- dispatch ----------
     async def run(
+        self,
+        report_type: str,
+        user: dict,
+        tickers: list[str] | None = None,
+        format: str = "markdown",
+    ) -> dict:
+        react = self._ensure_agno_react()
+        if react is not None:
+            try:
+                ctx = self._build_report_agno_prompt(report_type, user, tickers, format)
+                resp = await react.arun(ctx, stream=False)
+                d = coerce_json_dict(resp)
+                if d and _report_agno_payload_ok(d):
+                    return d
+            except Exception as e:
+                logger.error("Report Agno react error: %s", e)
+        return await self._run_legacy(report_type, user, tickers, format)
+
+    async def _run_legacy(
         self,
         report_type: str,
         user: dict,
