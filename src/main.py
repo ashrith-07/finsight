@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
         logging.getLogger().setLevel(level)
     logger.info(
         "Valura AI multi-agent ecosystem starting | "
-        "agents=5 | mcp_servers=3 | orchestrator=ValuraOrchestrator"
+        "agents=5 | mcp_servers=5 | orchestrator=ValuraOrchestrator"
     )
     logger.info(
         "service_startup",
@@ -336,7 +336,28 @@ async def list_agents() -> dict:
     return {
         "total_agents": 5,
         "orchestrator": "ValuraOrchestrator",
-        "mcp_servers": ["yfinance_mcp", "web_search_mcp", "report_mcp"],
+        "mcp_servers": [
+            {
+                "name": "yfinance_mcp",
+                "description": "Live market data — quotes, fundamentals, history, options",
+            },
+            {
+                "name": "web_search_mcp",
+                "description": "Web/news search — DuckDuckGo + Bing fallbacks for market analysis",
+            },
+            {
+                "name": "report_mcp",
+                "description": "PDF and Markdown report generation",
+            },
+            {
+                "name": "calculator_mcp",
+                "description": "Financial calculations - compound interest, DCA, Black-Scholes, retirement",
+            },
+            {
+                "name": "portfolio_analytics_mcp",
+                "description": "Portfolio analytics - beta, sector exposure, dividends, attribution",
+            },
+        ],
         "agents": [
             {
                 "name": "portfolio_health",

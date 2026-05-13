@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.llm.base import LLMClient
+from src.mcp import calculator_mcp, portfolio_analytics_mcp
 from src.models import (
     BenchmarkComparison,
     ConcentrationRisk,
@@ -676,9 +677,26 @@ class PortfolioHealthAgent:
             performance, oldest = _compute_performance(profile.positions, prices_local, fx)
 
             benchmark_name = _benchmark_preference(profile.preferences)
-            benchmark, bench_defaulted = await _compute_benchmark(
-                performance, benchmark_name, oldest
+
+            # Run benchmark fetch + 3 portfolio_analytics MCP tools concurrently —
+            # any single failure degrades to {"error": ...} without blocking the
+            # rest of the pipeline.
+            tickers = [str(p["ticker"]).upper() for p in positions_with_values if p.get("ticker")]
+            total_value = sum(p["current_value"] for p in positions_with_values) or 1.0
+            weights = [p["current_value"] / total_value for p in positions_with_values]
+
+            (
+                benchmark_pair,
+                sector_payload,
+                dividend_payload,
+                geo_payload,
+            ) = await asyncio.gather(
+                _compute_benchmark(performance, benchmark_name, oldest),
+                asyncio.to_thread(portfolio_analytics_mcp.sector_exposure, tickers, weights),
+                asyncio.to_thread(portfolio_analytics_mcp.dividend_analysis, positions_with_values),
+                asyncio.to_thread(portfolio_analytics_mcp.geographic_exposure, tickers, weights),
             )
+            benchmark, bench_defaulted = benchmark_pair
 
             observations = await _generate_observations(
                 user, concentration, performance, benchmark, self._llm,
@@ -699,6 +717,34 @@ class PortfolioHealthAgent:
                     ),
                 )
 
+            # Surface concrete analytics flags in the observation feed.
+            for sector in (sector_payload.get("overweight_sectors") or [])[:1]:
+                observations.append(Observation(
+                    severity="warning",
+                    text=(
+                        f"Sector concentration: {sector['exposure_pct']:.1f}% in "
+                        f"{sector['sector']} (above 40% threshold)."
+                    ),
+                ))
+            div_income = dividend_payload.get("annual_dividend_income")
+            if isinstance(div_income, (int, float)) and div_income > 0:
+                observations.append(Observation(
+                    severity="info",
+                    text=(
+                        f"Projected dividend income: ${div_income:,.2f}/year "
+                        f"(~${dividend_payload.get('projected_monthly_income', 0):,.2f}/month)."
+                    ),
+                ))
+            if geo_payload.get("home_bias_flag"):
+                top = geo_payload.get("top_country") or {}
+                observations.append(Observation(
+                    severity="warning",
+                    text=(
+                        f"Home-bias risk: {top.get('exposure_pct'):.1f}% concentrated in "
+                        f"{top.get('country')}."
+                    ),
+                ))
+
             return PortfolioHealthResult(
                 concentration_risk=concentration,
                 performance=performance,
@@ -707,7 +753,11 @@ class PortfolioHealthAgent:
                 disclaimer=DISCLAIMER,
                 build_guidance=None,
                 sub_intent="full_health_check",
-                extras=None,
+                extras={
+                    "sector_exposure": sector_payload,
+                    "dividend_analysis": dividend_payload,
+                    "geographic_exposure": geo_payload,
+                },
             )
         except Exception:
             logger.exception("PortfolioHealthAgent.run failed; returning minimal safe result")
@@ -980,8 +1030,8 @@ class PortfolioHealthAgent:
         )
 
     async def _rebalance_suggestion(self, user: dict) -> PortfolioHealthResult:
-        """Equity-vs-bonds drift relative to risk-profile target + suggested trades."""
-        rows, _prices, _fx, warnings = await self._priced_positions(user)
+        """Equity-vs-bonds drift relative to risk-profile target + per-ticker trade list."""
+        rows, prices_local, _fx, warnings = await self._priced_positions(user)
         if not rows:
             return build_guidance_response(user)
 
@@ -997,7 +1047,37 @@ class PortfolioHealthAgent:
         }
         drift = {k: round(current_split[k] - target[k], 4) for k in ("equity", "bonds")}
 
-        # Translate drift into dollar trades: positive bond drift = need to BUY bonds.
+        # Pro-rate the asset-class target back across each held ticker so the
+        # calculator can produce concrete per-ticker trades.
+        bond_holdings = [r for r in rows if r["ticker"] in _BOND_TICKERS]
+        equity_holdings = [r for r in rows if r["ticker"] not in _BOND_TICKERS]
+        target_alloc: dict[str, float] = {}
+        if equity_holdings:
+            cur_eq_total = sum(r["current_value"] for r in equity_holdings) or 1.0
+            for r in equity_holdings:
+                share = r["current_value"] / cur_eq_total
+                target_alloc[r["ticker"]] = target["equity"] * share * 100.0
+        if bond_holdings:
+            cur_bd_total = sum(r["current_value"] for r in bond_holdings) or 1.0
+            for r in bond_holdings:
+                share = r["current_value"] / cur_bd_total
+                target_alloc[r["ticker"]] = target["bonds"] * share * 100.0
+
+        calc_input = [
+            {
+                "ticker": r["ticker"],
+                "current_value": r["current_value"],
+                "current_pct": (r["current_value"] / total) * 100.0,
+                "price": prices_local.get(r["ticker"], r.get("current_price_local") or 0.0),
+            }
+            for r in rows
+        ]
+        calc_payload = await asyncio.to_thread(
+            calculator_mcp.portfolio_rebalance_trades, calc_input, target_alloc, total,
+        )
+        per_ticker_trades = calc_payload.get("actionable_trades") or []
+
+        # Asset-class summary trades (kept for high-level reporting).
         trade_amount_usd = round(abs(drift["equity"]) * total, 2)
         action = "trim equity, add bonds" if drift["equity"] > 0 else "add equity, trim bonds"
         rebalance_trades = [
@@ -1058,6 +1138,8 @@ class PortfolioHealthAgent:
                 "current_allocation": current_split,
                 "drift": drift,
                 "rebalance_trades": rebalance_trades,
+                "per_ticker_trades": per_ticker_trades,
+                "total_trade_value_usd": calc_payload.get("total_trade_value", 0.0),
             },
         )
 
