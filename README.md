@@ -1,211 +1,329 @@
-# Valura AI Microservice
+# Valura AI — Multi-Agent Financial Intelligence Ecosystem
 
-Intent routing, portfolio analytics, and streaming responses for Valura’s AI co-investor layer. Single FastAPI service: **one POST endpoint**, **SSE-only** replies, **no OpenAI dependency in CI** (mock LLM fallback).
+A production-grade FastAPI service that turns one user query into a parallel multi-agent run across portfolio analytics, market research, risk modelling, news sentiment and report generation — streamed back as SSE with per-agent timing telemetry.
 
----
-
-## Defence Video
-
-**[Defence walkthrough (Loom)](https://www.loom.com/share/0bab3c411f05459c8d6bb514b26ad242)**
+> **Defence walkthrough:** [Loom recording](https://www.loom.com/share/0bab3c411f05459c8d6bb514b26ad242)
 
 ---
 
-## Architecture
-
-A chat turn is handled as a **linear pipeline** before anything hits an agent model for long-form work. First, the **safety guard** evaluates the raw user string synchronously with compiled regex rules (policy buckets such as insider trading, manipulation, AML patterns, etc.). If the query is blocked, the pipeline stops immediately: we stream the refusal as SSE text and close — **no classifier, no external pricing calls, no billing to OpenAI**. That ordering matters because once we’ve invoked third-party models or market data, we’ve already spent latency and money on content we must not produce.
-
-If the query passes safety, the **intent classifier** runs **exactly one** structured LLM call (or a cached duplicate within the same session window). It returns an `agent` slug plus extracted `entities` so downstream code never has to re-parse natural language. The **router** maps that slug to `PortfolioHealthAgent` (fully implemented) or a **stub** for every other taxonomy slot. Only then does the chosen agent run — today that means either portfolio math + yfinance + a **second** LLM call for plain-language observations, or a deterministic stub response.
-
-The classifier uses a two-stage approach. A TF-IDF + Logistic Regression pre-classifier handles high-confidence routing without an LLM call. Queries below the 0.80 confidence threshold fall through to the LLM path. This reduces cost and latency for common queries.
-
-Finally the HTTP layer streams **SSE**: token-ish **delta** chunks for a short summary line, a **result** event carrying the full structured `AgentResponse` JSON, then **done**. Errors never leak stack traces to the client; they become **error** events with stable codes.
+## Architecture Overview
 
 ```
-  Client POST /chat (JSON body)
-           │
-           ▼
-    ┌──────────────┐     blocked? ──► SSE: delta (refusal) ──► done
-    │ Safety guard │                              │
-    └──────────────┘                              └── stop
-           │ pass
-           ▼
-    ┌──────────────┐     session query cache hit?
-    │ Classifier   │ ◄── replicate ClassifierResult (still route agent)
-    │ (1× LLM)     │
-    └──────────────┘
-           │
-           ▼
-    ┌──────────────┐
-    │ AgentRouter  │──► portfolio_health ──► yfinance + metrics + observations LLM
-    └──────────────┘──► other agents ───────► StubAgent (no crash)
-           │
-           ▼
-    SSE: delta … ──► result (JSON) ──► persist ConversationTurn ──► done
+                                  ┌────────────────────────────────────────────────┐
+                                  │              Browser / API client              │
+                                  └─────────────────────┬──────────────────────────┘
+                                                        │ POST /chat  (SSE)
+                                                        ▼
+                       ┌─────────────────────────────────────────────────────────────┐
+                       │  FastAPI app  (src/main.py)   ─  38 routes, metrics, /docs  │
+                       └─────────────────────────────────────────────────────────────┘
+                                                        │
+                                                        ▼
+                       ┌─────────────────────────────────────────────────────────────┐
+                       │  Safety Guard   ─  TF-IDF + Logistic Regression  (~0.003ms) │
+                       └─────────────────────────────────────────────────────────────┘
+                                          │ pass             │ blocked → SSE refusal
+                                          ▼
+                       ┌─────────────────────────────────────────────────────────────┐
+                       │  Two-stage Intent Classifier                                │
+                       │   1. TF-IDF + LR pre-classifier (≥0.80 conf → no LLM call) │
+                       │   2. LLM fallback for ambiguous queries  (Groq / OpenAI)   │
+                       └─────────────────────────────────────────────────────────────┘
+                                                        │
+                                                        ▼
+                       ┌─────────────────────────────────────────────────────────────┐
+                       │  ValuraOrchestrator   (src/orchestrator.py)                 │
+                       │  asyncio.gather → fan out → collect timings → synthesise    │
+                       └─────────────────────────────────────────────────────────────┘
+                                                        │
+        ┌───────────────────┬──────────────────┬────────┴────────┬──────────────────┬───────────────────┐
+        ▼                   ▼                  ▼                 ▼                  ▼                   ▼
+ ┌────────────────┐  ┌──────────────┐   ┌────────────┐    ┌─────────────┐    ┌──────────────┐
+ │ portfolio_health│  │market_research│   │ risk_analysis│  │financial_news│   │report_generator│
+ └────────┬───────┘  └──────┬───────┘   └─────┬──────┘    └──────┬──────┘    └──────┬───────┘
+          │                 │                 │                  │                  │
+          ▼                 ▼                 ▼                  ▼                  ▼
+ ┌──────────────────────────────────────────────────────────────────────────────────────────┐
+ │                              MCP toolkits  (src/mcp/*.py)                                │
+ │  yfinance_mcp │ web_search_mcp │ report_mcp │ calculator_mcp │ portfolio_analytics_mcp   │
+ └──────────────────────────────────────────────────────────────────────────────────────────┘
+                                                        │
+                                                        ▼
+                       ┌─────────────────────────────────────────────────────────────┐
+                       │  SSE stream:  delta · result (+ execution_metadata) · done  │
+                       └─────────────────────────────────────────────────────────────┘
 ```
+
+A `/chat` request flows top-to-bottom: safety check → intent classification → orchestrator dispatch → fan-out across the relevant agents → synthesis → SSE stream with per-agent timings attached as `execution_metadata` on the final `result` event. The browser UI in `frontend/index.html` consumes the same stream and renders a live timeline of which agents ran in parallel, their durations and the wall-clock saving.
 
 ---
 
-## Non-Obvious Decisions
+## The 5 Agents
 
-### Why in-memory session storage?
+| Agent | Use Cases (Sub-intents) | MCP Servers Used | Runs in Parallel With |
+|---|---|---|---|
+| **portfolio_health** | `full_health_check`, `concentration_only`, `performance_only`, `benchmark_comparison`, `rebalance_suggestion`, `tax_loss_harvesting` | `yfinance_mcp`, `portfolio_analytics_mcp`, `calculator_mcp` | `risk_analysis`, `financial_news` |
+| **market_research** | `price_check`, `full_research`, `comparison`, `fundamentals`, `technical_levels`, `options_activity` | `yfinance_mcp` | `financial_news` |
+| **risk_analysis** | `full_risk`, `var_only`, `stress_test`, `correlation`, `single_stock_risk`, `volatility_analysis` | `yfinance_mcp`, `web_search_mcp` | `portfolio_health`, `financial_news` |
+| **financial_news** | `ticker_news`, `market_news`, `sector_news`, `economic_events`, `sentiment_summary` | `web_search_mcp`, `yfinance_mcp` | every primary agent |
+| **report_generator** | `portfolio`, `market`, `risk`, `comparison` | `report_mcp`, `yfinance_mcp`, `web_search_mcp` | runs serially **after** prefetch ecosystem |
 
-**Zero infrastructure dependencies** for reviewers and classroom CI: clone, `pip install`, run tests. Access is **O(1)** per session id with a bounded deque (`MAX_TURNS = 10`). That’s defensible for demo scale and single-process deployments. For production I’d swap this for **Redis** (TTL per session, horizontal replicas, eviction under memory pressure) or append-only storage if compliance needs audit trails — the async API surface (`get_prior_user_turns`, `add_turn`, …) was kept deliberately small so that swap is mechanical.
+Each agent has its own `_detect_sub_intent()` routine — keyword regexes against the classifier's intent + the raw user query — so a single agent endpoint can route to one of several focused implementations without another LLM round-trip.
 
-### Why a strict `LLMClient` interface?
+---
 
-CI must pass **without** `OPENAI_API_KEY`. A narrow ABC lets tests inject **`MockLLMClient`** with queued responses — no monkeypatching OpenAI. **`openai` is imported in exactly one module** (`src/llm/openai_llm.py`), which keeps greps honest and avoids accidental SDK coupling in agents. Adding Anthropic or Gemini is **one new concrete class** + factory branch; the classifier and portfolio agent stay untouched.
+## The 5 MCP Servers
 
-### Why SSE-only (no JSON fallback)?
+Built on the **Agno** `Toolkit` base — every tool is registered at construction time and discoverable by both Agno-style tool-calling LLMs and the orchestrator's direct Python dispatch.
 
-The assignment requires streaming. Practically, **SSE matches how users perceive LLM latency**: they see the first bytes quickly instead of staring at a spinner until a full JSON blob exists. A JSON-only API would force buffering the summary and the structured payload in lockstep; here we stream a short human-readable prefix, then attach the machine-readable `AgentResponse` as one frame.
+| Server | Tools | Used By |
+|---|---|---|
+| **yfinance_mcp** | `get_price_snapshot`, `get_historical_prices`, `get_company_fundamentals`, `get_financial_statements`, `get_options_data`, `screen_stocks` | `portfolio_health`, `market_research`, `risk_analysis`, `financial_news`, `report_generator` |
+| **web_search_mcp** | `search_financial_news`, `search_company_news`, `search_market_analysis`, `get_economic_events` | `financial_news`, `risk_analysis`, `report_generator` |
+| **report_mcp** | `generate_portfolio_report`, `generate_market_report`, `generate_risk_report` | `report_generator` |
+| **calculator_mcp** | `compound_interest`, `dca_projection`, `options_black_scholes`, `loan_amortisation`, `retirement_projection`, `portfolio_rebalance_trades` | `portfolio_health` (rebalance), direct REST |
+| **portfolio_analytics_mcp** | `efficient_frontier_point`, `portfolio_beta`, `sector_exposure`, `dividend_analysis`, `geographic_exposure`, `performance_attribution` | `portfolio_health` (concentration, sector, dividends) |
 
-### Safety guard design
+All servers are instantiated as **singletons** in `src/mcp/__init__.py` and reused across agents — no per-request initialisation cost.
 
-Rule-based filtering was the initial approach. The guard now uses a TF-IDF + Logistic Regression classifier trained at startup on the fixture safety pairs plus augmented examples. Inference is under 1ms. No internet required — the model trains from local data every startup. The 0.55 confidence threshold is intentionally conservative to minimise over-blocking of educational queries.
+---
 
-### Two-stage classifier
+## The 38 Endpoints
 
-The pre-classifier eliminates the LLM call for high-confidence queries. This directly improves p95 latency and reduces cost per query. Confidence threshold is 0.80 — tuned to prefer the LLM for ambiguous queries rather than risk a misroute.
+Every focused REST endpoint runs the same agent code as `/chat` but skips SSE streaming and returns a structured JSON payload. Exhaustive list also lives at **`GET /docs-custom`** (machine-readable) and **`GET /docs`** (Swagger UI).
 
-### Pipeline timeout: 30 seconds
+### Chat (1) — streaming multi-agent pipeline
+- `POST /chat` — Server-Sent Events stream (`delta` → `result` → `done`); reads `execution_metadata` for parallel timing telemetry.
 
-Happy path on this codebase is dominated by **yfinance** round-trips plus **two** LLM calls on portfolio-heavy flows (classifier + observations). Locally that lands **~3–6s** after warm caches; **30s** leaves roughly **6×** slack for slow Yahoo endpoints or transient LLM latency without letting workers hang forever. Override via `PIPELINE_TIMEOUT`.
+### Portfolio (8)
+- `POST /portfolio/health` — full health check (concentration + performance + benchmark + analytics extras)
+- `POST /portfolio/concentration` — top-position + live sector breakdown
+- `POST /portfolio/performance` — returns vs cost basis, best / worst positions
+- `POST /portfolio/benchmark` — comparison vs S&P 500 / QQQ / preferred benchmark
+- `POST /portfolio/rebalance` — exact buy/sell trades from `calculator_mcp.portfolio_rebalance_trades`
+- `POST /portfolio/tax-loss` — tax-loss harvest opportunities + wash-sale-safe replacements
+- `POST /portfolio/sector-exposure` — sector + geographic breakdown from `portfolio_analytics_mcp`
+- `POST /portfolio/dividends` — annual dividend income + monthly cash flow
 
-### Cost per query estimate
+### Market (6)
+- `POST /market/snapshot` — current price, day change, volume
+- `POST /market/fundamentals` — P/E, revenue, margins, debt ratios
+- `POST /market/technical` — 52-week range, MAs, golden / death cross
+- `POST /market/compare` — side-by-side comparison of 2+ tickers
+- `POST /market/options` — options activity, put/call ratio, implied vol
+- `POST /market/screen` — concurrent metrics for a watchlist, ranked by market cap
 
-Rough order-of-magnitude at published **gpt-4.1**-class pricing (check OpenAI’s current page before quoting externally):
+### Risk (5)
+- `POST /risk/full` — VaR + drawdown + Sharpe + stress + correlations
+- `POST /risk/var` — Value at Risk at 95% and 99% confidence
+- `POST /risk/stress-test` — five historical crash scenarios
+- `POST /risk/correlation` — pairwise correlations above 0.7
+- `POST /risk/volatility` — beta, std-dev, Bollinger position per holding
 
+### News (5)
+- `POST /news/tickers` — latest news per ticker (with sentiment tags)
+- `POST /news/market` — broad market headlines
+- `POST /news/sentiment` — aggregate bullish/bearish score
+- `POST /news/economic-calendar` — Fed / earnings / macro releases (no body)
+- `POST /news/sector` — news grouped by sector
 
-| Step                   | Tokens (indicative) | Notes                                       |
-| ---------------------- | ------------------- | ------------------------------------------- |
-| Classifier             | ~500 in / ~100 out  | System taxonomy + entity vocab + user query |
-| Portfolio observations | ~800 in / ~200 out  | Metrics JSON + profile summary              |
+### Calculator (4)
+- `POST /calculate/compound-interest` — compound growth + monthly contributions
+- `POST /calculate/dca` — dollar-cost-averaging projection
+- `POST /calculate/retirement` — retirement readiness check (4% rule)
+- `POST /calculate/options-price` — Black-Scholes price + Greeks
 
-Using current pricing **$2 / 1M input tokens** and **$8 / 1M output tokens**:
+### Report (3)
+- `POST /report/portfolio` — markdown / PDF portfolio report → saved under `/reports/`
+- `POST /report/market` — market research report for one or more tickers
+- `POST /report/risk` — risk analysis report
 
-- Classifier: `500×2e-6 + 100×8e-6` ≈ **$0.0018**
-- Observations: `800×2e-6 + 200×8e-6` ≈ **$0.0032**
-- For queries routed by the pre-classifier (high confidence): **~$0.005** per query (portfolio health observations only).
-- For queries that fall through to the LLM classifier: **~$0.008** per query (classifier + observations).
+### System (6)
+- `GET /` — single-page dashboard (`frontend/index.html`)
+- `GET /health` — liveness probe
+- `GET /users` — bundled fixture profiles for the UI selector
+- `GET /agents` — agents + MCP servers registry
+- `GET /metrics` — live counters (`total_requests_served`, `parallel_execution_count`, `average_response_time_ms`, `requests_per_agent`, …)
+- `GET /docs-custom` — human-readable API guide as JSON
 
-### What I'd do differently with another week
+---
 
-1. The pre-classifier threshold of 0.80 was tuned against 61 fixture queries. A larger labeled set would let me push this higher and skip the LLM more often.
-2. yfinance has a retry wrapper now but is still not production-grade. The right fix is a caching layer in front of a paid provider like Polygon. The fetch function is already abstracted so the swap is one change.
-3. Correlation IDs in the logs. Per-stage timing is now there. Correlation IDs would let you trace a single request across distributed components when this scales horizontally.
+## Parallelism
+
+The orchestrator uses **`asyncio.gather`** to fan out independent agent calls. A small wrapper (`_safe_run`) records each task's wall time, then `_build_exec_metadata` packs the per-task ms, the actual gather wall time and the *would-have-been* sequential sum into the `execution_metadata` field on the `AgentResponse`.
+
+### What it actually looks like
+
+```python
+# src/orchestrator.py
+results, timings, wall_ms = await self._run_parallel([
+    ("portfolio_health", self._portfolio.run(user, intent=intent, query=query)),
+    ("risk_analysis",    self._risk.run(user, intent=intent, query=query)),
+    ("news_agent",       self._news.run(tickers=tickers, topics=[...], user=user, ...)),
+])
+# wall_ms = real awaited time, timings = {agent_name: ms}
+```
+
+### Real timing example  (measured live during smoke test)
+
+A `"how is my portfolio doing?"` query for a 2-position profile fans out to **portfolio_health + risk_analysis + financial_news**:
+
+| Agent | Duration |
+|---|---|
+| portfolio_health | **5045 ms** |
+| risk_analysis | **2054 ms** |
+| financial_news | **2037 ms** |
+| **Sequential sum** | **9136 ms** |
+| **Wall (parallel)** | **5046 ms** |
+| **Saved** | **4090 ms  (45 % faster)** |
+
+That same `execution_metadata` JSON ships in the SSE result event and the browser UI's "Parallel Execution Timeline" renders it as scaled bars + a saved-ms summary in the accent colour:
+
+```json
+{
+  "agents_ran": ["portfolio_health", "risk_analysis", "news_agent"],
+  "timings": {"portfolio_health": 5045, "risk_analysis": 2054, "news_agent": 2037},
+  "parallel": true,
+  "wall_time_ms": 5046,
+  "sequential_time_ms": 9136,
+  "time_saved_ms": 4090
+}
+```
+
+The wall time is bounded by the *slowest* agent, not the sum — exactly what we want when each task is I/O-bound (LLM call + yfinance round-trip + DDG search). Compute-bound work would not benefit (the asyncio loop is single-threaded), but every agent here spends almost all of its time waiting on the network.
+
+---
+
+## Tech Stack
+
+| Technology | Purpose | Why chosen |
+|---|---|---|
+| **FastAPI** | HTTP + SSE + OpenAPI | Async-native; Pydantic v2 baked in; `EventSourceResponse` via `sse-starlette` is a one-liner. |
+| **Pydantic v2** | Schema validation everywhere | `extra="forbid"` catches drift early; `model_dump_json()` makes SSE serialisation trivial; strict types stop UI ↔ backend contract bugs. |
+| **Agno** | Multi-agent + MCP toolkit | Provides `Toolkit` and `Agent` primitives that work with both Groq and OpenAI; lets MCP servers be discoverable to tool-calling LLMs *without* giving up direct Python dispatch. |
+| **Groq** (primary) / **OpenAI** (fallback) | LLM inference for classifier + observations | Groq's `llama-3.3-70b-versatile` is fast (sub-second) and free for development; OpenAI is the production fallback. Provider precedence: Groq → OpenAI → `SmartMockLLMClient`. |
+| **scikit-learn** | TF-IDF + Logistic Regression | Used in two places: safety guard (~0.003 ms inference) and intent pre-classifier (skips the LLM for ≥0.80 confidence routing). Trains at startup from local fixtures — no network. |
+| **yfinance** | Live equity / FX data | Free, global ticker coverage, no signup. Wrapped in `tenacity` for retries. Production swap target: Polygon or IEX. |
+| **tenacity** | Exponential-backoff retry | Yahoo Finance is rate-limit-prone; tenacity sits in front of every yfinance call so transient 429s don't kill the request. |
+| **scipy** | Black-Scholes Greeks + statistics | Just for `scipy.stats.norm` (options pricing) and a few numerical helpers. |
+| **numpy** | Portfolio math | Returns, correlations, drawdowns, stress tests — all vectorised. |
+| **duckduckgo-search** | News search MCP | Free, no API key, decent freshness. Bing fallback baked into `web_search_mcp`. |
+| **fpdf2** | PDF report rendering | Pure-Python, no system fonts required, produces inspector-friendly artefacts under `reports/`. |
+| **pytest** + `pytest-asyncio` | Test runner | First-class coroutine support so the production `async def` agents are tested as-is, no `asyncio.run()` boilerplate. |
+| **httpx** | Async HTTP client + TestClient | Used for ad-hoc smoke tests and could back any future webhook MCP. |
+| **uvicorn[standard]** | ASGI server | `--reload` in dev; HTTP/1.1 + `httptools` + `uvloop` in prod. |
+| **python-dotenv** | `.env` loading | One-line bootstrap; never required in production where env vars come from the orchestrator. |
 
 ---
 
 ## Setup
 
-### Requirements
-
-- **Python 3.11+**
-- **OpenAI API key** — optional; without it the factory returns **`MockLLMClient`** (empty queue — fine for health checks; use injected mocks in tests).
-
-### Installation
-
 ```bash
 git clone https://github.com/2CentsCapital/valura-ai-ai-engineer-assignment-ashrith-07
 cd valura-ai-ai-engineer-assignment-ashrith-07
-python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
+
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+
+# No API key required for the deterministic mock path:
+unset GROQ_API_KEY OPENAI_API_KEY    # uses SmartMockLLMClient — no key needed
+
+# Optional: copy the env template and add your Groq (or OpenAI) key for live LLM output
 cp .env.example .env
-# Optionally set OPENAI_API_KEY for live LLM output
+
+uvicorn src.main:app --reload
 ```
 
-### Environment Variables
+#### Open
 
+<http://localhost:8000>
 
-| Variable           | Required | Default       | Description                                                                |
-| ------------------ | -------- | ------------- | -------------------------------------------------------------------------- |
-| `OPENAI_API_KEY`   | No       | —            | If unset/empty,**`MockLLMClient`** is selected automatically               |
-| `LLM_MODEL`        | No       | `gpt-4o-mini` | Chat model id (`OPENAI_MODEL` alias supported for backwards compatibility) |
-| `PIPELINE_TIMEOUT` | No       | `30`          | Max seconds for the`/chat` generator (float allowed)                       |
-| `LOG_LEVEL`        | No       | `INFO`        | Root log level (`DEBUG`, `INFO`, …)                                       |
-| `APP_ENV`          | No       | —            | Set to`test` in CI workflows if you branch on it                           |
+The single-page UI lives there. The right panel has three tabs:
 
-See `.env.example` for optional persistence/cache placeholders used in broader designs.
+- **Ecosystem** — agent cards (live status), MCP servers (last-called), parallel execution timeline, activity log
+- **API Explorer** — every endpoint grouped by category with a *Try* button that pre-fills a relevant chat query
+- **Live Metrics** — service counters auto-refreshed every 10 s
 
-### Running
+### Environment variables (all optional)
 
-```bash
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
-```
+| Variable | Default | Purpose |
+|---|---|---|
+| `GROQ_API_KEY` | — | Preferred LLM provider when set |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Override the default Groq model |
+| `OPENAI_API_KEY` | — | Used only if `GROQ_API_KEY` is absent |
+| `OPENAI_MODEL` / `LLM_MODEL` | `gpt-4o-mini` | OpenAI model id alias |
+| `PIPELINE_TIMEOUT` | `30` | Seconds per `/chat` SSE generator |
+| `LOG_LEVEL` | `INFO` | Root logging level |
+| `APP_ENV` | — | Set to `test` in CI if you branch on it |
 
-### Testing (no API key required)
-
-```bash
-pytest tests/ -v
-```
-
-### Example Request
-
-Build JSON from the bundled US trader fixture and stream SSE:
-
-```bash
-python - <<'PY' | curl -sS -N -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d @-
-import json
-from pathlib import Path
-user = json.loads(Path("fixtures/users/user_001_active_trader_us.json").read_text())
-print(json.dumps({
-  "query": "how is my portfolio doing",
-  "session_id": "demo-session",
-  "user": user,
-}))
-PY
-```
+If both keys are unset, the app silently falls back to `SmartMockLLMClient` — every endpoint stays functional with deterministic, intent-aware mock responses.
 
 ---
 
-## Performance Measurements
+## Running Tests
 
-**Methodology:** micro-benchmarks on a developer laptop (Python 3.13, May 2026) — **not** production SLA data. For HTTP p95 under load, rerun with **wrk**/k6 against `POST /chat` with a representative body.
+```bash
+pytest tests/ -v                     # no API key needed
+```
 
-
-| Measurement                                 | Result                                                                      | Notes                                  |
-| ------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------- |
-| Safety guard                                | **~0.003 ms** avg over **500** calls (`check("how is my portfolio doing")`) | Pure CPU regex path                    |
-| Portfolio health (mock LLM + live yfinance) | **~2.5–3.0 s** warm requests; **~5 s** first call after import             | Dominated by Yahoo Finance round-trips |
-| Full test suite`pytest tests/ -v`           | **~11 s** wall clock                                                        | Includes network-bound portfolio tests |
-
-**First-byte SSE latency** for `/chat` was not stress-tested with concurrent clients in this submission — recommend measuring after deploying behind your ASGI server of choice.
+The 10-test suite trains the safety guard and pre-classifier on the bundled fixtures, exercises the full classifier routing matrix, and runs `PortfolioHealthAgent` against a stubbed yfinance — completes in ~9 s.
 
 ---
 
-## Library Choices
+## Architecture Decisions
 
+### Why Agno over LangGraph / CrewAI
 
-| Library            | Why                                                                         |
-| ------------------ | --------------------------------------------------------------------------- |
-| **FastAPI**        | Async-first, native Pydantic v2 models for request validation               |
-| **sse-starlette**  | Correct SSE framing (`EventSourceResponse`), ping & disconnect semantics    |
-| **yfinance**       | Free equity/FX snapshots without vendor signup; good global ticker coverage |
-| **scikit-learn**  | TF-IDF + Logistic Regression for safety guard and intent pre-classifier     |
-| **tenacity**      | Retry logic on yfinance calls with exponential backoff                       |
-| **pydantic v2**    | Strict schemas (`extra="forbid"`), fast validation, JSON ergonomics         |
-| **pytest-asyncio** | First-class async tests matching production coroutines                      |
-| **httpx**          | Async-capable client for integration tests / tooling                        |
+Agno's `Agent`, `Team` and `Toolkit` primitives are intentionally thin — closer to "structured glue around an LLM call" than the heavy DAG/state-machine abstractions of LangGraph or the role-playing layer of CrewAI. That's the right shape for this codebase because **the orchestrator's routing logic is imperative Python**, not graph-driven. Agno gives us tool-calling LLMs and MCP-style toolkits when we want them, but doesn't impose a runtime that has to be reasoned about separately. The result: I can call `agent.run()` directly *or* call `agent.as_agno_agent()` and let an LLM tool-call its way through the same toolkit — both paths share the underlying code.
+
+### Why MCP pattern over direct API calls
+
+Each MCP server (`yfinance_mcp`, `web_search_mcp`, `report_mcp`, `calculator_mcp`, `portfolio_analytics_mcp`) is a single class that registers a curated set of stable, well-typed methods. Three benefits:
+
+1. **One swap point per data source.** Replacing yfinance with Polygon means rewriting `yfinance_server.py` only — nothing else moves.
+2. **Tool-calling compatibility.** Every method is automatically exposed as an Agno tool, so an LLM can invoke `yfinance_mcp.get_price_snapshot("NVDA")` without bespoke prompt engineering.
+3. **Singleton lifecycle.** Servers instantiate once at import, share a thread-pool internally, and amortise authentication / connection costs across requests.
+
+### Why `asyncio.gather` for parallelism
+
+Every fan-out in this codebase is **I/O-bound** — LLM HTTPs, yfinance round-trips, DDG searches. `asyncio.gather` is the right primitive because:
+
+- It's free (no thread pool, no GIL contention) and lives natively inside FastAPI's event loop.
+- Each agent's `run()` is already `async def`, so wrapping with `_safe_run` to capture timings is a 5-line helper, not a refactor.
+- The wall time becomes the **slowest** agent, not the sum — and we surface that win to the UI via `execution_metadata.time_saved_ms`.
+
+A `multiprocessing` pool would have been wrong (overhead + serialisation cost). A thread pool would have worked but with no upside given the I/O-bound profile and a real downside in the form of per-thread overhead and GIL juggling for the small CPU-bound bits.
+
+### Why TF-IDF + LR over an LLM for the safety guard
+
+The safety guard runs **before** anything else on every request. Latency budget: microseconds. An LLM round-trip would be 100,000× slower (~300 ms vs 3 µs), would **cost money on every blocked query**, and would be non-deterministic across providers. TF-IDF + scikit-learn `LogisticRegression` trains at startup from `fixtures/safety_pairs.json` plus augmented examples, predicts in **~3 µs**, has an inspectable decision boundary, and can be retrained from CI without touching the model graph. The 0.55 confidence threshold is intentionally conservative to err toward not-blocking ambiguous educational queries.
+
+The same reasoning applies to the **two-stage intent classifier**: a TF-IDF + LR pre-classifier handles ≥0.80-confidence routing without ever calling an LLM, cutting cost and tail latency for the common cases (portfolio health, market price checks, news lookups). Anything ambiguous falls through to the LLM — best of both worlds.
+
+### Why in-memory session storage over Redis for the demo
+
+Zero infrastructure dependencies for reviewers and CI: clone, `pip install`, run tests. Access is **O(1)** per session id with a bounded deque (`MAX_TURNS = 10`). For production this is the obvious swap: a Redis-backed store with TTL per session, horizontal replicas and eviction under memory pressure. The async API (`get_prior_user_turns`, `add_turn`, `get_last_entities`) was kept deliberately small so the swap is a one-file change in `src/session.py`, no caller updates required.
 
 ---
 
 ## Repository Layout
 
-
-| Path                             | Role                                             |
-| -------------------------------- | ------------------------------------------------ |
-| `src/main.py`                    | FastAPI app,`/chat` SSE pipeline                 |
-| `src/safety.py`                  | Rule-based safety guard                          |
-| `src/classifier.py`              | Intent classifier (`IntentClassifier`)           |
-| `src/router.py`                  | Agent routing                                    |
-| `src/agents/portfolio_health.py` | Full portfolio agent                             |
-| `src/agents/stub.py`             | Placeholder responses                            |
-| `src/session.py`                 | In-memory sessions + optional query dedupe cache |
-| `src/llm/`                       | `LLMClient` ABC, OpenAI + mock implementations   |
-| `fixtures/`                      | Labeled queries and user profiles for tests      |
-| `tests/`                         | pytest suite (passes without API keys)           |
+| Path | Role |
+|---|---|
+| `src/main.py` | FastAPI app, `/chat` SSE pipeline, 33 focused REST endpoints, metrics counters |
+| `src/orchestrator.py` | `ValuraOrchestrator` — fan-out + timing capture + synthesis |
+| `src/safety.py` | TF-IDF + LR safety guard |
+| `src/classifier.py` | Two-stage classifier (LR pre-classifier → LLM fallback) |
+| `src/router.py` | Routes `ClassifierResult` → orchestrator or `StubAgent` |
+| `src/agents/` | Five primary agents + stub fallback |
+| `src/mcp/` | Five MCP toolkit servers (Agno `Toolkit` subclasses) |
+| `src/llm/` | `LLMClient` ABC + Groq, OpenAI, Mock and SmartMock implementations |
+| `src/models.py` | Pydantic schemas (incl. `AgentResponse`, `ExecutionMetadata`) |
+| `src/session.py` | In-memory session store + duplicate-query cache |
+| `frontend/index.html` | Single-page UI with tabbed Ecosystem / API / Metrics panels |
+| `fixtures/` | Labelled queries + user profiles used by tests and the UI selector |
+| `tests/` | pytest suite (passes without any API key) |
+| `reports/` | Generated portfolio / market / risk reports (gitignored runtime output) |
 
 Assignment brief and rubric context remain in [`ASSIGNMENT.md`](ASSIGNMENT.md).
