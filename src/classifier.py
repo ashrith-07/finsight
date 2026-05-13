@@ -160,6 +160,26 @@ FALLBACK_RESULT = ClassifierResult(
 )
 
 
+# A safety net for risk-style phrasings the LLM and pre-classifier sometimes
+# misroute to portfolio_health. Matches "what if the market drops 20%",
+# "stress test my book", "worst case scenario", etc.
+_RISK_OVERRIDE_RX = re.compile(
+    r"\b(what\s+if|what\s+happens?\s+(if|when))\b.*\b(drop|drops|crash(es)?|"
+    r"fall(s)?|decline(s)?|tank(s)?|plunge(s)?|sell[\s-]?off)\b",
+    re.IGNORECASE,
+)
+_RISK_KEYWORD_RX = re.compile(
+    r"\b(stress[\s-]?test(s|ing)?|var\b|value[-\s]at[-\s]risk|worst[-\s]case|"
+    r"max(imum)?\s+drawdown|tail\s+risk|black\s+swan|scenario\s+analysis|"
+    r"market\s+crash)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_risk_query(query: str) -> bool:
+    return bool(_RISK_OVERRIDE_RX.search(query) or _RISK_KEYWORD_RX.search(query))
+
+
 class IntentPreClassifier:
     CONFIDENCE_THRESHOLD = 0.80
     AGENT_LABELS = [
@@ -361,11 +381,16 @@ class IntentClassifier:
         prior_user_turns: list[str] | None = None,
         last_entities: dict | None = None,
     ) -> ClassifierResult:
+        # Bypass kept narrow: only when we're purely deterministic (no risk keywords
+        # AND a real LLM is mocked). Otherwise the override is too useful to skip.
+        risk_override = _looks_like_risk_query(query)
+
         try:
-            # Keep deterministic tests unchanged: queued mocks should always drive output.
             if not isinstance(self._llm, MockLLMClient):
                 pre_agent, pre_conf = self._pre.predict(query)
                 if pre_conf >= IntentPreClassifier.CONFIDENCE_THRESHOLD:
+                    if risk_override and pre_agent != "risk_assessment":
+                        pre_agent = "risk_assessment"
                     return ClassifierResult(
                         intent=query,
                         agent=pre_agent,
@@ -398,6 +423,11 @@ class IntentClassifier:
             if agent not in self.AGENT_TAXONOMY:
                 agent = "general_query"
 
+            # Override only "soft" misroutes — never overrule explicit non-portfolio targets like
+            # market_research or financial_planning that the LLM picked deliberately.
+            if risk_override and agent in {"portfolio_health", "general_query", "predictive_analysis"}:
+                agent = "risk_assessment"
+
             intent = str(payload.get("intent") or "unknown").strip() or "unknown"
             entities = _coerce_entities(payload.get("entities"))
             safety_verdict = str(payload.get("safety_verdict") or "clean").strip() or "clean"
@@ -412,6 +442,15 @@ class IntentClassifier:
             )
         except Exception:
             logger.exception("Intent classification failed; returning fallback result")
+            if risk_override:
+                # Don't fall back to general_query for an obvious risk query.
+                return ClassifierResult(
+                    intent=query,
+                    agent="risk_assessment",
+                    entities=Entity(),
+                    safety_verdict="clean",
+                    confidence=0.55,
+                )
             return self.FALLBACK_RESULT
 
 

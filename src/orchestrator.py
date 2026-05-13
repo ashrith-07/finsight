@@ -310,15 +310,33 @@ class ValuraOrchestrator:
         else:
             market_dict = {"raw": str(market_result)}
 
+        snaps = market_dict.get("snapshots") or []
+        parts: list[str] = []
+        if snaps:
+            quotes = ", ".join(
+                f"{s.get('ticker')} {s.get('currency', 'USD')} {s.get('current_price'):.2f} "
+                f"({s.get('day_change_pct'):+.2f}%)"
+                for s in snaps[:3]
+                if isinstance(s.get('current_price'), (int, float))
+            )
+            if quotes:
+                parts.append(f"Live tape — {quotes}.")
+
+        comp = market_dict.get("comparison_note")
+        if comp:
+            parts.append(str(comp).strip())
+
         articles = (news_result or {}).get("articles") or []
-        head = articles[0].get("title") if articles else ""
-        snap_obs = (market_dict.get("observations") or [{}])[0]
-        snap_txt = snap_obs.get("text") if isinstance(snap_obs, dict) else getattr(snap_obs, "text", "")
-        summ = (
-            f"{snap_txt} "
-            f"Parallel news scan returned {len(articles)} articles for context on: {intent}. "
-            f"{'Top headline: ' + head if head else 'No headlines matched filters.'}"
-        )
+        if articles:
+            head = articles[0].get("title") or ""
+            parts.append(
+                f"Parallel news scan: {len(articles)} articles"
+                f"{f' — top headline “{head[:80]}…”' if head else ''}."
+            )
+        elif snaps:
+            parts.append("Parallel news scan returned no headlines (likely rate-limit).")
+
+        summ = " ".join(parts) or f"Market research completed for: {intent}."
         return {
             "market_research": market_dict,
             "market_news": news_result,
@@ -338,24 +356,42 @@ class ValuraOrchestrator:
         else:
             ph = dict(portfolio)
 
-        obs_ph = (ph.get("observations") or [{}])[0]
-        top_p = obs_ph.get("text") if isinstance(obs_ph, dict) else getattr(obs_ph, "text", "")
+        parts: list[str] = []
+        var = risk.get("var") or {}
+        var95 = var.get("one_day_95")
+        var99 = var.get("one_day_99")
+        if isinstance(var95, (int, float)) and isinstance(var99, (int, float)):
+            parts.append(
+                f"1-day VaR: ${var95:,.0f} at 95% / ${var99:,.0f} at 99% confidence."
+            )
+
+        sharpe = risk.get("sharpe_ratio_annualised")
+        max_dd = risk.get("max_drawdown_pct")
+        if isinstance(sharpe, (int, float)) and isinstance(max_dd, (int, float)):
+            parts.append(f"Sharpe ≈ {sharpe:.2f}; trailing max drawdown {max_dd:+.2f}%.")
+
         stress = risk.get("stress_tests") or []
         worst = min(stress, key=lambda s: s.get("portfolio_loss_pct", 0)) if stress else {}
-        arts = (news.get("articles") or [])[:1]
-        sent = arts[0].get("sentiment", "neutral") if arts else "neutral"
+        if worst:
+            parts.append(
+                f"Worst modeled shock — {worst.get('scenario', 'n/a')}: "
+                f"{worst.get('portfolio_loss_pct', 'n/a')}% drawdown."
+            )
 
-        summary = (
-            f"Portfolio lens: {top_p or 'No headline observation.'} "
-            f"Worst modeled shock in the suite: {worst.get('scenario', 'n/a')} "
-            f"({worst.get('portfolio_loss_pct', 'n/a')}%). "
-            f"Latest macro/news sentiment skew: {sent}."
-        )
+        arts = news.get("articles") or []
+        if arts:
+            counts = news.get("sentiment_counts") or {}
+            parts.append(
+                f"Macro news overlay: {len(arts)} articles "
+                f"(pos {counts.get('positive', 0)} / neu {counts.get('neutral', 0)} / "
+                f"neg {counts.get('negative', 0)})."
+            )
+
         return {
             "portfolio_health": ph,
             "risk_analysis": risk,
             "market_news": news,
-            "ecosystem_summary": summary.strip(),
+            "ecosystem_summary": " ".join(parts) or "Risk analysis completed.",
         }
 
     def _ecosystem_summary_portfolio(
@@ -364,24 +400,48 @@ class ValuraOrchestrator:
         risk: dict[str, Any],
         news: dict[str, Any],
     ) -> str:
-        obs = portfolio.get("observations") or []
-        top = ""
-        if obs:
-            o0 = obs[0]
-            top = o0.get("text") if isinstance(o0, dict) else getattr(o0, "text", "")
+        """Build a numeric, non-redundant summary so it doesn't repeat what observations say."""
+        perf = portfolio.get("performance") or {}
+        conc = portfolio.get("concentration_risk") or {}
+        bench = portfolio.get("benchmark_comparison") or {}
+
+        parts: list[str] = []
+
+        cv = perf.get("current_value_total")
+        tr = perf.get("total_return_pct")
+        bm = bench.get("benchmark_return_pct")
+        bm_name = bench.get("benchmark") or "benchmark"
+        if isinstance(cv, (int, float)) and cv > 0:
+            tr_str = f"{tr:+.2f}%" if isinstance(tr, (int, float)) else "n/a"
+            bm_str = f"{bm:+.2f}%" if isinstance(bm, (int, float)) else "n/a"
+            parts.append(
+                f"Portfolio value sits at ${cv:,.0f} (return {tr_str} vs {bm_name} {bm_str})."
+            )
+
+        flag = (conc.get("flag") or "").lower()
+        top = conc.get("top_position_pct")
+        if flag in {"medium", "high"} and isinstance(top, (int, float)):
+            parts.append(f"Concentration is {flag}: top holding ≈ {top:.1f}% of book.")
+
         stress = risk.get("stress_tests") or []
         worst = min(stress, key=lambda s: s.get("portfolio_loss_pct", 0)) if stress else {}
-        arts = news.get("articles") or []
-        sent = arts[0].get("sentiment", "neutral") if arts else "neutral"
-        hl = arts[0].get("title") if arts else ""
+        if worst:
+            parts.append(
+                f"Worst modeled stress scenario ({worst.get('scenario', 'historical shock')}): "
+                f"{worst.get('portfolio_loss_pct', 'n/a')}% drawdown."
+            )
 
-        return (
-            f"{top or 'Portfolio analytics completed.'} "
-            f"In a severe stress scenario ({worst.get('scenario', 'historical shock')}) "
-            f"the modeled portfolio draw approached {worst.get('portfolio_loss_pct', 'n/a')}%. "
-            f"Parallel news sentiment on the top story is {sent}"
-            f"{f' ({hl[:80]}…)' if hl else ''}."
-        )
+        arts = news.get("articles") or []
+        if arts:
+            counts = news.get("sentiment_counts") or {}
+            n_total = news.get("total_results") or len(arts)
+            sent_summary = (
+                f"pos {counts.get('positive', 0)} / neu {counts.get('neutral', 0)} / "
+                f"neg {counts.get('negative', 0)}"
+            )
+            parts.append(f"News overlay: {n_total} articles ({sent_summary}).")
+
+        return " ".join(parts) or "Portfolio analytics completed."
 
     def _build_agent_response(
         self,
@@ -435,42 +495,48 @@ class ValuraOrchestrator:
         return "portfolio"
 
     def _message_for_portfolio(self, combined: dict[str, Any]) -> str:
-        ph = combined.get("portfolio_health") or {}
-        obs = ph.get("observations") or []
-        if obs:
-            o0 = obs[0]
-            t = o0.get("text") if isinstance(o0, dict) else str(o0)
-            return f"Ran portfolio, risk, and news in parallel — primary read: {t[:160]}"
-        return "Ran portfolio, risk, and news pipelines and merged the ecosystem output."
+        return str(combined.get("ecosystem_summary") or "").strip() or (
+            "Ran portfolio, risk, and news pipelines and merged the ecosystem output."
+        )
 
     def _message_for_market(self, combined: dict[str, Any]) -> str:
-        mr = combined.get("market_research") or {}
-        snaps = mr.get("snapshots") or []
-        if snaps:
-            s0 = snaps[0]
-            return (
-                f"Merged live quotes with parallel news — lead tape: {s0.get('ticker')} "
-                f"{s0.get('day_change_pct')}% on the session."
-            )
-        return "Merged market research with parallel news scans."
+        return str(combined.get("ecosystem_summary") or "").strip() or (
+            "Merged market research with parallel news scans."
+        )
 
     def _message_for_risk_ecosystem(self, combined: dict[str, Any]) -> str:
-        r = combined.get("risk_analysis") or {}
-        var95 = (r.get("var") or {}).get("one_day_95")
-        return (
-            f"Combined portfolio, VaR, stress suite, and macro news — 1-day 95% VaR ≈ {var95}."
-            if var95 is not None
-            else "Combined portfolio context with quantitative risk and news overlays."
+        return str(combined.get("ecosystem_summary") or "").strip() or (
+            "Combined portfolio context with quantitative risk and news overlays."
         )
 
     def _message_for_news(self, payload: dict[str, Any]) -> str:
         n = payload.get("total_results") or len(payload.get("articles") or [])
-        return f"News enrichment returned {n} deduplicated articles with sentiment tags."
+        summary = str(payload.get("summary") or "").strip()
+        head = (
+            f" Top: “{(payload.get('articles') or [{}])[0].get('title', '')[:80]}…”."
+            if (payload.get("articles") or [])
+            else ""
+        )
+        if summary:
+            return f"{summary}{head}"
+        return f"News enrichment returned {n} deduplicated articles with sentiment tags.{head}"
 
     def _message_for_report(self, payload: dict[str, Any]) -> str:
         rp = payload.get("report") or {}
         fn = rp.get("filename") or "report"
-        return f"Generated {payload.get('report_type', 'portfolio')} report artefact ({fn})."
+        path = rp.get("file_path") or ""
+        rt = payload.get("report_type", "portfolio")
+        # Surface the first non-blank section of the markdown so the chat shows real content.
+        preview = ""
+        content = rp.get("content")
+        if isinstance(content, str) and content.strip():
+            for line in content.splitlines():
+                if line.strip() and not line.startswith("#"):
+                    preview = line.strip()
+                    break
+        loc = f" Saved to {path}." if path else ""
+        head = f"Generated {rt} report ({fn})."
+        return f"{head}{loc}{(' ' + preview) if preview else ''}"
 
 
 __all__ = ["ValuraOrchestrator"]

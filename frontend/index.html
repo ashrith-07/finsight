@@ -179,6 +179,127 @@
       margin-bottom: 6px;
     }
 
+    /* Rich result block under each AI message */
+    .result-block {
+      margin-top: 10px;
+      padding: 10px 12px;
+      background: rgba(0, 212, 170, 0.04);
+      border: 1px solid rgba(0, 212, 170, 0.18);
+      border-radius: 8px;
+      display: grid;
+      gap: 10px;
+    }
+    .result-block .rb-section { display: grid; gap: 4px; }
+    .result-block .rb-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 8px;
+    }
+    .stat {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+    .stat .stat-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .stat .stat-value {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 13px;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+    .stat .stat-value.up { color: var(--green); }
+    .stat .stat-value.down { color: var(--red); }
+    .stat .stat-value.warn { color: var(--amber); }
+    .obs-list { display: grid; gap: 4px; padding: 0; margin: 0; list-style: none; }
+    .obs-list li {
+      display: grid;
+      grid-template-columns: 60px 1fr;
+      gap: 8px;
+      font-size: 12.5px;
+      align-items: start;
+    }
+    .obs-tag {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 2px 4px;
+      border-radius: 4px;
+      text-align: center;
+      justify-self: start;
+    }
+    .obs-tag.info { background: rgba(0, 212, 170, 0.15); color: var(--accent); }
+    .obs-tag.warning { background: rgba(245, 158, 11, 0.18); color: var(--amber); }
+    .obs-tag.critical { background: rgba(239, 68, 68, 0.18); color: var(--red); }
+    .news-item {
+      font-size: 12.5px;
+      padding: 4px 0;
+      border-bottom: 1px dashed var(--border);
+    }
+    .news-item:last-child { border-bottom: none; }
+    .news-item a { color: var(--accent); text-decoration: none; }
+    .news-item a:hover { text-decoration: underline; }
+    .sentiment-pill {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-right: 6px;
+    }
+    .sentiment-pill.positive { background: rgba(52, 211, 153, 0.18); color: var(--green); }
+    .sentiment-pill.negative { background: rgba(239, 68, 68, 0.18); color: var(--red); }
+    .sentiment-pill.neutral { background: rgba(139, 148, 158, 0.2); color: #9ca3af; }
+    .report-preview {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11.5px;
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .file-link {
+      display: inline-block;
+      background: var(--panel-2);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 11.5px;
+      text-decoration: none;
+    }
+    .file-link:hover { background: var(--accent-dim); }
+    table.snapshot-tbl {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+    }
+    table.snapshot-tbl th, table.snapshot-tbl td {
+      padding: 6px 8px;
+      text-align: right;
+      border-bottom: 1px solid var(--border);
+    }
+    table.snapshot-tbl th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; }
+    table.snapshot-tbl td:first-child, table.snapshot-tbl th:first-child { text-align: left; }
+
     .typing-dot {
       display: inline-block;
       width: 6px;
@@ -514,11 +635,14 @@
       const dot = card.querySelector('[data-status]');
       const stateEl = card.querySelector('[data-state]');
       const timeEl = card.querySelector('[data-time]');
+      dot.classList.remove('running', 'done', 'error');
       if (state) {
         card.classList.add(state);
-        dot.classList.remove('running', 'done', 'error');
         dot.classList.add(state);
         stateEl.textContent = state;
+      } else {
+        // explicit reset to idle (e.g. agent we expected didn't actually fire)
+        stateEl.textContent = 'idle';
       }
       if (typeof ms === 'number') {
         timeEl.textContent = ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
@@ -567,7 +691,11 @@
     function appendAiMessage() {
       const el = document.createElement('div');
       el.className = 'msg ai';
-      el.innerHTML = `<div class="badge" data-badge>thinking</div><span data-body></span><span class="typing-dot" data-dot></span>`;
+      el.innerHTML = `
+        <div class="badge" data-badge>thinking</div>
+        <span data-body></span>
+        <span class="typing-dot" data-dot></span>
+        <div data-rich></div>`;
       messagesEl.appendChild(el);
       trimHistory();
       scrollChat();
@@ -648,7 +776,12 @@
 
       sendBtn.disabled = true;
       resetAgentStates();
+      const expected = predictAgents(query);
+      for (const a of expected) setAgentState(a, 'running');
+      if (expected.length) pushLog(`Dispatching to ${expected.join(' + ')}…`, expected.length > 1);
+      else pushLog('Dispatching…', false);
       const reqStart = performance.now();
+      let sawResult = false;
 
       try {
         const res = await fetch('/chat', {
@@ -665,23 +798,72 @@
             bodyEl.textContent += chunk;
             scrollChat();
           },
-          onResult: (jsonStr) => handleResult(jsonStr, aiBubble, badgeEl, reqStart),
+          onResult: (jsonStr) => {
+            sawResult = true;
+            handleResult(jsonStr, aiBubble, badgeEl, reqStart, expected);
+          },
           onError: (jsonStr) => {
             const parsed = safeJson(jsonStr);
             const m = (parsed && parsed.message) || jsonStr || 'unknown error';
             appendErrorMessage(m);
+            badgeEl.textContent = 'error';
+            for (const a of expected) setAgentState(a, null);
           },
           onDone: () => {
             dotEl.remove();
+            if (!sawResult) {
+              // Safety-block path: only delta + done, no result event.
+              badgeEl.textContent = 'safety';
+              badgeEl.style.color = 'var(--red)';
+              badgeEl.style.background = 'rgba(239, 68, 68, 0.12)';
+              badgeEl.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+              for (const a of expected) setAgentState(a, null);
+              pushLog(`safety guard blocked the query (${(performance.now() - reqStart | 0)} ms)`, false);
+            }
           },
         });
       } catch (e) {
         appendErrorMessage('Network error: ' + e.message);
         dotEl.remove();
+        for (const a of expected) setAgentState(a, 'error');
       } finally {
         sendBtn.disabled = false;
-        resetAgentStates();
+        // Deliberately do NOT resetAgentStates() — leaving the done/error
+        // state visible so the user sees the most recent run on the cards.
       }
+    }
+
+    /**
+     * Heuristic prediction of which agents the orchestrator will fire.
+     * Used purely for the running-glow UX while we wait for the result event.
+     * If the actual `result` event reports a different set, we reconcile in handleResult().
+     */
+    function predictAgents(query) {
+      const q = query.toLowerCase();
+      const has = (...kws) => kws.some(k => q.includes(k));
+
+      // Safety blocks — no agents fire
+      if (has('insider', 'pump and dump', 'manipulate', 'launder', 'guaranteed return')) {
+        return [];
+      }
+      // Reports
+      if (has('report', 'pdf', 'export', 'generate a report', 'create a report')) {
+        return ['report_generator', 'portfolio_health'];
+      }
+      // Risk
+      if (has('risk', 'stress test', 'var', 'drawdown', 'what if', 'crash', 'tail', 'worst case')) {
+        return ['risk_analysis', 'portfolio_health', 'financial_news'];
+      }
+      // Market research (single ticker / compare)
+      if (has('price', 'compare', 'tell me about', 'how is ', 'how are ', 'news on', 'stock', 'shares')) {
+        return ['market_research', 'financial_news'];
+      }
+      // Portfolio health (default for portfolio queries)
+      if (has('portfolio', 'holdings', 'diversified', 'concentration', 'positions', 'beating')) {
+        return ['portfolio_health', 'risk_analysis', 'financial_news'];
+      }
+      // Fallback — light up nothing for general queries
+      return [];
     }
 
     /**
@@ -725,7 +907,7 @@
       else if (event === 'done' && h.onDone) h.onDone();
     }
 
-    function handleResult(jsonStr, aiBubble, badgeEl, reqStart) {
+    function handleResult(jsonStr, aiBubble, badgeEl, reqStart, expected) {
       const parsed = safeJson(jsonStr);
       if (!parsed) return;
 
@@ -734,6 +916,13 @@
       badgeEl.textContent = (PRETTY[primary] || primary).replace('_', ' ');
 
       const ran = inferAgentsRan(parsed);
+      const ranSet = new Set(ran);
+
+      // Reconcile: agents we predicted but didn't actually run → revert to idle.
+      // Agents that did run → mark done with shared elapsed.
+      for (const a of (expected || [])) {
+        if (!ranSet.has(a)) setAgentState(a, null);
+      }
       // Per-agent timing isn't streamed; share request elapsed across siblings as a UX cue.
       const perAgent = ran.length ? Math.round(elapsedMs / ran.length) : elapsedMs;
       for (const a of ran) setAgentState(a, 'done', perAgent);
@@ -747,6 +936,238 @@
       } else {
         pushLog(`${ran[0] || primary} completed in ${(elapsedMs / 1000).toFixed(2)}s`, false);
       }
+
+      // Render the rich result block under the chat bubble
+      const richEl = aiBubble.querySelector('[data-rich]');
+      if (richEl) {
+        richEl.innerHTML = renderRichResult(parsed);
+        scrollChat();
+      }
+    }
+
+    /**
+     * Build the structured result panel under the AI message.
+     * Different layouts per agent — pulls the actual numbers/data from parsed.result.
+     */
+    function renderRichResult(parsed) {
+      const r = parsed.result || {};
+      if (!r || typeof r !== 'object') return '';
+
+      const sections = [];
+      const ph = r.portfolio_health;
+      const ra = r.risk_analysis;
+      const mr = r.market_research;
+      const news = r.market_news;
+      const report = r.report;
+
+      if (ph && ph.performance) sections.push(renderPortfolioBlock(ph));
+      if (mr) sections.push(renderMarketBlock(mr));
+      if (ra && (ra.var || ra.stress_tests)) sections.push(renderRiskBlock(ra));
+      if (news && (news.articles || news.total_results)) sections.push(renderNewsBlock(news));
+      if (report) sections.push(renderReportBlock(report, r.report_type));
+
+      if (!sections.length) return '';
+      return `<div class="result-block">${sections.join('')}</div>`;
+    }
+
+    function renderPortfolioBlock(ph) {
+      const perf = ph.performance || {};
+      const conc = ph.concentration_risk || {};
+      const bench = ph.benchmark_comparison || {};
+      const obs = ph.observations || [];
+
+      const stat = (label, val, cls = '') =>
+        `<div class="stat"><div class="stat-label">${escapeHtml(label)}</div>` +
+        `<div class="stat-value ${cls}">${escapeHtml(val)}</div></div>`;
+
+      const trClass = (perf.total_return_pct || 0) >= 0 ? 'up' : 'down';
+      const alphaClass = (bench.alpha_pct || 0) >= 0 ? 'up' : 'down';
+      const flag = (conc.flag || 'low').toLowerCase();
+      const flagClass = flag === 'high' ? 'down' : flag === 'medium' ? 'warn' : 'up';
+
+      const stats = [
+        stat('Value', fmtMoney(perf.current_value_total)),
+        stat('Total return', fmtPct(perf.total_return_pct), trClass),
+        stat(`vs ${bench.benchmark || 'bench'}`, fmtPct(bench.benchmark_return_pct)),
+        stat('Alpha', fmtPct(bench.alpha_pct), alphaClass),
+        stat('Top holding', fmtPct(conc.top_position_pct, false)),
+        stat('Concentration', flag.toUpperCase(), flagClass),
+      ].join('');
+
+      return `
+        <div class="rb-section">
+          <div class="rb-title">Portfolio Health</div>
+          <div class="stat-grid">${stats}</div>
+          ${renderObservations(obs)}
+        </div>`;
+    }
+
+    function renderMarketBlock(mr) {
+      const snaps = mr.snapshots || [];
+      const obs = mr.observations || [];
+      const comp = mr.comparison_note;
+
+      let table = '';
+      if (snaps.length) {
+        const rows = snaps.map(s => {
+          const dc = s.day_change_pct;
+          const cls = (dc || 0) >= 0 ? 'up' : 'down';
+          return `<tr>
+            <td><strong>${escapeHtml(s.ticker)}</strong></td>
+            <td>${escapeHtml(s.currency || '')} ${fmtNum(s.current_price)}</td>
+            <td class="${cls}" style="color:${cls === 'up' ? 'var(--green)' : 'var(--red)'}">${fmtPct(dc)}</td>
+            <td>${fmtNum(s.fifty_two_week_high)}</td>
+            <td>${fmtNum(s.fifty_two_week_low)}</td>
+            <td>${fmtPct(s.distance_from_52w_high_pct, false)}</td>
+          </tr>`;
+        }).join('');
+        table = `<table class="snapshot-tbl">
+          <thead><tr><th>Ticker</th><th>Price</th><th>Day %</th><th>52W High</th><th>52W Low</th><th>Off High</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+      }
+      const compHtml = comp ? `<div style="font-size:12.5px;font-style:italic;color:var(--muted);">${escapeHtml(comp)}</div>` : '';
+
+      return `
+        <div class="rb-section">
+          <div class="rb-title">Market Research</div>
+          ${table}
+          ${compHtml}
+          ${renderObservations(obs)}
+        </div>`;
+    }
+
+    function renderRiskBlock(ra) {
+      const v = ra.var || {};
+      const stress = ra.stress_tests || [];
+      const obs = ra.observations || [];
+
+      const stat = (label, val, cls = '') =>
+        `<div class="stat"><div class="stat-label">${escapeHtml(label)}</div>` +
+        `<div class="stat-value ${cls}">${escapeHtml(val)}</div></div>`;
+
+      const stats = [
+        stat('VaR 95% (1d)', fmtMoney(v.one_day_95), 'warn'),
+        stat('VaR 99% (1d)', fmtMoney(v.one_day_99), 'down'),
+        stat('Sharpe', fmtNum(ra.sharpe_ratio_annualised)),
+        stat('Max DD', fmtPct(ra.max_drawdown_pct), 'down'),
+      ].join('');
+
+      let stressHtml = '';
+      if (stress.length) {
+        const rows = stress.slice(0, 6).map(s => {
+          return `<tr>
+            <td>${escapeHtml(s.scenario || '')}</td>
+            <td style="color:var(--red);">${fmtPct(s.market_decline_pct)}</td>
+            <td style="color:var(--red);">${fmtMoney(s.portfolio_loss_usd)}</td>
+            <td>${fmtMoney(s.surviving_value)}</td>
+          </tr>`;
+        }).join('');
+        stressHtml = `<table class="snapshot-tbl">
+          <thead><tr><th>Scenario</th><th>Market</th><th>Loss</th><th>Surviving</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+      }
+
+      return `
+        <div class="rb-section">
+          <div class="rb-title">Risk Analysis</div>
+          <div class="stat-grid">${stats}</div>
+          ${stressHtml}
+          ${renderObservations(obs)}
+        </div>`;
+    }
+
+    function renderNewsBlock(news) {
+      const articles = news.articles || [];
+      const counts = news.sentiment_counts || {};
+      const summary = news.summary;
+
+      if (!articles.length && !summary) return '';
+
+      const summaryHtml = summary ? `<div style="font-size:12.5px;color:var(--text);">${escapeHtml(summary)}</div>` : '';
+      const items = articles.slice(0, 5).map(a => {
+        const sent = a.sentiment || 'neutral';
+        const title = a.title || '(untitled)';
+        const url = a.url || '#';
+        return `<div class="news-item">
+          <span class="sentiment-pill ${sent}">${sent}</span>
+          <a href="${escapeAttr(url)}" target="_blank" rel="noopener">${escapeHtml(title)}</a>
+        </div>`;
+      }).join('') || '<div style="font-size:12px;color:var(--muted);">No headlines returned (likely rate-limit on the free DDG endpoint).</div>';
+
+      const countLine = `<div style="font-size:11px;color:var(--muted);">
+        ${news.total_results || articles.length} articles —
+        <span class="sentiment-pill positive">${counts.positive || 0}</span>
+        <span class="sentiment-pill neutral">${counts.neutral || 0}</span>
+        <span class="sentiment-pill negative">${counts.negative || 0}</span>
+      </div>`;
+
+      return `
+        <div class="rb-section">
+          <div class="rb-title">News</div>
+          ${countLine}
+          ${summaryHtml}
+          ${items}
+        </div>`;
+    }
+
+    function renderReportBlock(report, reportType) {
+      const fname = report.filename || '';
+      const path = report.file_path || '';
+      const content = report.content || '';
+      const fmt = report.format || 'markdown';
+
+      const preview = content
+        ? `<div class="report-preview">${escapeHtml(content.slice(0, 1200))}${content.length > 1200 ? '\n\n...(truncated)' : ''}</div>`
+        : '';
+
+      const link = fname
+        ? `<a class="file-link" href="/reports/${encodeURIComponent(fname)}" target="_blank">📄 ${escapeHtml(fname)}</a>`
+        : '';
+      const localPath = path ? `<div style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',ui-monospace,monospace;">${escapeHtml(path)}</div>` : '';
+
+      return `
+        <div class="rb-section">
+          <div class="rb-title">${escapeHtml((reportType || 'report').toUpperCase())} REPORT — ${escapeHtml(fmt.toUpperCase())}</div>
+          ${link}
+          ${localPath}
+          ${preview}
+        </div>`;
+    }
+
+    function renderObservations(obs) {
+      if (!obs || !obs.length) return '';
+      const items = obs.slice(0, 5).map(o => {
+        const sev = (o.severity || 'info').toLowerCase();
+        return `<li><span class="obs-tag ${sev}">${sev}</span><span>${escapeHtml(o.text || '')}</span></li>`;
+      }).join('');
+      return `<ul class="obs-list">${items}</ul>`;
+    }
+
+    function fmtMoney(v) {
+      if (v == null || isNaN(v)) return '—';
+      const n = Number(v);
+      const abs = Math.abs(n);
+      if (abs >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+      if (abs >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+      return `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    }
+    function fmtPct(v, signed = true) {
+      if (v == null || isNaN(v)) return '—';
+      const n = Number(v);
+      const sign = signed && n > 0 ? '+' : '';
+      return `${sign}${n.toFixed(2)}%`;
+    }
+    function fmtNum(v) {
+      if (v == null || isNaN(v)) return '—';
+      const n = Number(v);
+      if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+      if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+      return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+    function escapeAttr(s) {
+      return String(s == null ? '' : s).replace(/"/g, '&quot;');
     }
 
     /**

@@ -80,43 +80,65 @@ _FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "fronte
 if os.path.isdir(_FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=_FRONTEND_DIR), name="static")
 
+# Generated reports — served raw so the UI can offer a one-click view/download.
+_REPORTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reports")
+os.makedirs(_REPORTS_DIR, exist_ok=True)
+app.mount("/reports", StaticFiles(directory=_REPORTS_DIR), name="reports")
+
 
 def _sse(event: str, data: str) -> dict[str, str]:
     return {"event": event, "data": data}
 
 
+_HOUSEKEEPING_OBS_KEYWORDS = (
+    "benchmark total return was unavailable",
+    "live quote unavailable",
+)
+
+
+def _is_housekeeping(text: str) -> bool:
+    """Filter out tooling-warning observations so we don't repeat them in the summary."""
+    low = (text or "").lower()
+    return any(kw in low for kw in _HOUSEKEEPING_OBS_KEYWORDS)
+
+
+def _pick_lead_observation(observations: list) -> str:
+    """First *substantive* observation text, skipping housekeeping warnings."""
+    for o in observations:
+        text = o.get("text") if isinstance(o, dict) else getattr(o, "text", "")
+        text = str(text or "").strip()
+        if text and not _is_housekeeping(text):
+            return text
+    return ""
+
+
 def _build_summary(response: AgentResponse) -> str:
-    if response.agent == "portfolio_health" and response.result is not None:
-        result = response.result
+    """
+    Build the streamed delta text. Rules:
+    - For portfolio_health (ecosystem dict): ecosystem_summary + ONE substantive observation + disclaimer.
+      Never pick the auto-injected "benchmark unavailable" obs as the lead — orchestrator
+      already mentions the benchmark numerically.
+    - For the legacy single-result PortfolioHealthResult shape (used by older paths/tests):
+      lead observation + disclaimer.
+    - Everything else: response.message (orchestrator builds these to be self-contained).
+    """
+    result = response.result
+    if response.agent == "portfolio_health" and result is not None:
         if isinstance(result, PortfolioHealthResult):
-            observations = result.observations[:2]
-            obs_text = " ".join(o.text for o in observations)
-            return f"{obs_text} {result.disclaimer}".strip()
+            lead = _pick_lead_observation(result.observations)
+            return f"{lead} {result.disclaimer}".strip() if lead else result.disclaimer
+
         if isinstance(result, dict):
             nested = result.get("portfolio_health")
             if isinstance(nested, dict):
-                observations = nested.get("observations") or []
-                parts: list[str] = []
-                for o in observations[:2]:
-                    if isinstance(o, dict):
-                        parts.append(str(o.get("text") or ""))
-                    elif hasattr(o, "text"):
-                        parts.append(str(getattr(o, "text")))
-                obs_text = " ".join(parts)
-                disc = str(nested.get("disclaimer") or "")
                 summ = str(result.get("ecosystem_summary") or "").strip()
-                base = f"{obs_text} {disc}".strip()
-                return f"{summ} {base}".strip() if summ else base
-            observations = result.get("observations") or []
-            parts = []
-            for o in observations[:2]:
-                if isinstance(o, dict):
-                    parts.append(str(o.get("text") or ""))
-                elif hasattr(o, "text"):
-                    parts.append(str(getattr(o, "text")))
-            obs_text = " ".join(parts)
+                lead = _pick_lead_observation(nested.get("observations") or [])
+                disc = str(nested.get("disclaimer") or "")
+                pieces = [p for p in (summ, lead, disc) if p]
+                return " ".join(pieces)
+            lead = _pick_lead_observation(result.get("observations") or [])
             disc = str(result.get("disclaimer") or "")
-            return f"{obs_text} {disc}".strip()
+            return " ".join(p for p in (lead, disc) if p)
     return response.message
 
 

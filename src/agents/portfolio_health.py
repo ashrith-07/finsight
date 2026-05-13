@@ -393,16 +393,18 @@ def _compute_performance(
 
 
 def _period_return_pct(symbol: str, start: datetime, end: datetime) -> float | None:
-    try:
-        end_adj = end + timedelta(days=1)
-        df = yf.download(
-            symbol,
-            start=start.strftime("%Y-%m-%d"),
-            end=end_adj.strftime("%Y-%m-%d"),
-            progress=False,
-            auto_adjust=True,
-            threads=False,
-        )
+    """Total return for ``symbol`` between ``start`` and ``end``.
+
+    yfinance's batch ``download`` endpoint has been flaky upstream; ``Ticker.history``
+    succeeds far more reliably for the same windows. We fall through to a coarse
+    period-based query if the explicit date range comes back empty.
+    """
+    def _try_history(t: yf.Ticker, **kwargs) -> float | None:
+        try:
+            df = t.history(auto_adjust=True, **kwargs)
+        except Exception as e:
+            logger.debug("Benchmark history call failed for %s (%s): %s", symbol, kwargs, e)
+            return None
         if df is None or df.empty:
             return None
         closes = df["Close"].dropna()
@@ -413,6 +415,31 @@ def _period_return_pct(symbol: str, start: datetime, end: datetime) -> float | N
         if first <= 0:
             return None
         return (last / first - 1.0) * 100.0
+
+    try:
+        ticker = yf.Ticker(symbol)
+        end_adj = end + timedelta(days=1)
+        # Explicit date range first
+        pct = _try_history(
+            ticker,
+            start=start.strftime("%Y-%m-%d"),
+            end=end_adj.strftime("%Y-%m-%d"),
+        )
+        if pct is not None:
+            return pct
+
+        # Coarse fallback — pick the smallest yfinance period that covers the window
+        days = max(1, (end - start).days)
+        period = (
+            "5d" if days <= 7
+            else "1mo" if days <= 31
+            else "3mo" if days <= 93
+            else "6mo" if days <= 186
+            else "1y" if days <= 380
+            else "2y" if days <= 760
+            else "5y"
+        )
+        return _try_history(ticker, period=period)
     except Exception as e:
         logger.debug("Benchmark fetch failed for %s: %s", symbol, e)
         return None
