@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 
 import numpy as np
@@ -11,9 +10,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
+from src.logging_config import get_logger
 from src.models import SafetyVerdict
 
-logger = logging.getLogger(__name__)
+logger = get_logger("safety")
 
 _BLOCK_THRESHOLD = 0.55
 

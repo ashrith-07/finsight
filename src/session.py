@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import time
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
+from src.logging_config import get_logger
 from src.models import ClassifierResult
 
-logger = logging.getLogger(__name__)
+logger = get_logger("session")
 
 
 @dataclass

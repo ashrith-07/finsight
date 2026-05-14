@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from typing import Any
 
 from agno.agent import Agent
@@ -14,9 +13,10 @@ from src.agents.risk_analysis import RiskAnalysisAgent
 from src.agents.agno_react import coerce_json_dict
 from src.llm.agno_model import get_agno_model
 from src.llm.base import LLMClient
+from src.logging_config import get_logger
 from src.mcp import portfolio_analytics_mcp, report_mcp, web_search_mcp, yfinance_mcp
 
-logger = logging.getLogger(__name__)
+logger = get_logger("agents.report_generator")
 
 REPORT_REACT_INSTRUCTIONS = [
     "You are a Financial Report Generator for Valura AI.",

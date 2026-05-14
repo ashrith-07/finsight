@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -16,9 +15,10 @@ from pydantic import ValidationError
 
 from src.llm.base import LLMClient
 from src.llm.mock_llm import MockLLMClient
+from src.logging_config import get_logger
 from src.models import ClassifierResult, Entity
 
-logger = logging.getLogger(__name__)
+logger = get_logger("classifier")
 
 # Mirrors fixtures/test_queries/intent_classification.json → agent_taxonomy.
 AGENT_TAXONOMY: dict[str, str] = {

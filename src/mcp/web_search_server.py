@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import logging
-
 from agno.tools import Toolkit
 from duckduckgo_search import DDGS
 
-logger = logging.getLogger(__name__)
+from src.logging_config import get_logger
+
+logger = get_logger("mcp.web_search")
 
 
 def _normalise_news(item: dict) -> dict:

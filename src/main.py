@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -23,6 +22,12 @@ from src.agents.report_generator import ReportGeneratorAgent
 from src.agents.risk_analysis import RiskAnalysisAgent
 from src.classifier import classify
 from src.llm import get_llm_client
+from src.logging_config import (
+    correlation_id_var,
+    get_logger,
+    new_correlation_id,
+    setup_logging,
+)
 from src.mcp import calculator_mcp, portfolio_analytics_mcp, yfinance_mcp
 from src.models import AgentResponse, ChatRequest, PortfolioHealthResult
 from src.orchestrator import ValuraOrchestrator  # noqa: F401  (re-exported for callers)
@@ -31,6 +36,7 @@ from src.safety import check as safety_check
 from src.session import ConversationTurn, agno_memory, query_cache, session_store
 
 load_dotenv()
+setup_logging()
 
 
 def _pipeline_timeout_s() -> float:
@@ -43,7 +49,7 @@ def _pipeline_timeout_s() -> float:
 
 PIPELINE_TIMEOUT = _pipeline_timeout_s()
 
-logger = logging.getLogger("valura.api")
+logger = get_logger("api")
 
 
 # ---------------------------------------------------------------------------
@@ -108,24 +114,15 @@ metrics = _Metrics()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, log_level_name, logging.INFO)
-    if not logging.root.handlers:
-        logging.basicConfig(
-            level=level,
-            format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-        )
-    else:
-        logging.getLogger().setLevel(level)
-    logger.info(
-        "Valura AI multi-agent ecosystem starting | "
-        "agents=5 | mcp_servers=5 | orchestrator=ValuraOrchestrator"
-    )
+    setup_logging()  # idempotent — ensures handlers are reset if uvicorn rewired them.
     logger.info(
         "service_startup",
         extra={
             "event": "lifecycle",
             "phase": "startup",
+            "agents": 5,
+            "mcp_servers": 5,
+            "orchestrator": "ValuraOrchestrator",
             "pipeline_timeout_s": PIPELINE_TIMEOUT,
         },
     )
@@ -217,6 +214,8 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
     router = AgentRouter(llm)
 
     async def event_generator():
+        correlation_id = new_correlation_id()
+        correlation_id_var.set(correlation_id)
         t0 = time.monotonic()
         t_safety = 0.0
         t_classify = 0.0
@@ -1005,7 +1004,13 @@ async def report_risk(request: ReportRequest) -> dict:
 @app.get("/metrics")
 async def system_metrics() -> dict:
     """Lightweight observability snapshot — counters live in-process."""
-    return metrics.snapshot()
+    snap = metrics.snapshot()
+    snap["logging"] = {
+        "format": "structured JSON",
+        "correlation_ids": True,
+        "example": 'grep correlation_id=req_7f3a2b1c server.log',
+    }
+    return snap
 
 
 @app.get("/docs-custom")

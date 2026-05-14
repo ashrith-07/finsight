@@ -6,14 +6,15 @@ thread, no rate limits, no retries needed.
 
 from __future__ import annotations
 
-import logging
 import math
 from datetime import date, timedelta
 
 from agno.tools import Toolkit
 from scipy.stats import norm
 
-logger = logging.getLogger(__name__)
+from src.logging_config import get_logger
+
+logger = get_logger("mcp.calculator")
 
 
 def _safe_float(value, default: float = 0.0) -> float:

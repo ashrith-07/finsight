@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import logging
-
 from src.agents.stub import StubAgent
 from src.llm.base import LLMClient
+from src.logging_config import get_logger
 from src.models import AgentResponse, ClassifierResult
 from src.orchestrator import ValuraAgnoTeam, ValuraOrchestrator
 
-logger = logging.getLogger(__name__)
+logger = get_logger("router")
 
 ORCHESTRATED = frozenset(
     {

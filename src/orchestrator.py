@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 import time
 from collections.abc import Awaitable
@@ -21,6 +20,7 @@ from src.agents import (
 )
 from src.agents.stub import StubAgent
 from src.llm.base import LLMClient
+from src.logging_config import get_logger
 from src.models import (
     AgentResponse,
     ClassifierResult,
@@ -29,7 +29,7 @@ from src.models import (
     PortfolioHealthResult,
 )
 
-logger = logging.getLogger("valura.orchestrator")
+logger = get_logger("orchestrator")
 
 
 class ValuraOrchestrator:

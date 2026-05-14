@@ -7,7 +7,6 @@ sentiment-summary flows.
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 from typing import Any
 
@@ -16,9 +15,10 @@ from agno.agent import Agent
 from src.agents.agno_react import coerce_json_dict
 from src.llm.agno_model import get_agno_model
 from src.llm.base import LLMClient
+from src.logging_config import get_logger
 from src.mcp import web_search_mcp, yfinance_mcp
 
-logger = logging.getLogger(__name__)
+logger = get_logger("agents.news")
 
 NEWS_REACT_INSTRUCTIONS = [
     "You are a Financial News Analyst for Valura AI.",

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+from src.logging_config import get_logger
+
+logger = get_logger("agents.agno_react")
 
 T = TypeVar("T", bound=BaseModel)
 

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 import time
 
+from src.logging_config import get_logger
 from src.models import AgentResponse, Entity, ExecutionMetadata
 
-logger = logging.getLogger(__name__)
+logger = get_logger("agents.stub")
 
 
 class StubAgent:

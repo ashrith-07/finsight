@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +9,9 @@ from pathlib import Path
 from agno.tools import Toolkit
 from fpdf import FPDF
 
-logger = logging.getLogger(__name__)
+from src.logging_config import get_logger
+
+logger = get_logger("mcp.report")
 
 DISCLAIMER = (
     "This report is for informational purposes only and does not constitute "

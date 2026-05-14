@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import yfinance as yf
 from agno.tools import Toolkit
 
-logger = logging.getLogger(__name__)
+from src.logging_config import get_logger
+
+logger = get_logger("mcp.yfinance")
 
 
 def _safe_float(value) -> float | None:

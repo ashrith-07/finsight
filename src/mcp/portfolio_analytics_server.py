@@ -6,14 +6,15 @@ keep the rest of the analytics pipeline alive.
 
 from __future__ import annotations
 
-import logging
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import yfinance as yf
 from agno.tools import Toolkit
 
-logger = logging.getLogger(__name__)
+from src.logging_config import get_logger
+
+logger = get_logger("mcp.portfolio_analytics")
 
 RISK_FREE_RATE = 0.0525
 TRADING_DAYS = 252

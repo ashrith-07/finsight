@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 from typing import Any
 
@@ -19,6 +18,7 @@ from pydantic import BaseModel
 from src.agents.agno_react import coerce_pydantic
 from src.llm.agno_model import get_agno_model
 from src.llm.base import LLMClient
+from src.logging_config import get_logger
 from src.mcp import web_search_mcp, yfinance_mcp
 from src.models import (
     CompanyInfo,
@@ -27,7 +27,7 @@ from src.models import (
     PriceSnapshot,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger("agents.market_research")
 
 DISCLAIMER = (
     "This data is sourced from public market feeds and is for "

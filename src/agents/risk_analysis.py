@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import re
 from typing import Any
 
@@ -21,10 +20,11 @@ from pydantic import BaseModel
 from src.agents.agno_react import coerce_json_dict
 from src.llm.agno_model import get_agno_model
 from src.llm.base import LLMClient
+from src.logging_config import get_logger
 from src.mcp import calculator_mcp, portfolio_analytics_mcp, yfinance_mcp
 from src.models import Observation
 
-logger = logging.getLogger(__name__)
+logger = get_logger("agents.risk_analysis")
 
 DISCLAIMER = (
     "Risk metrics are estimates based on historical price data and assume past "
