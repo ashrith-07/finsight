@@ -12,7 +12,7 @@ pinned: true
 
 A production-grade FastAPI service that turns one user query into a parallel multi-agent run across portfolio analytics, market research, risk modelling, news sentiment and report generation — streamed back as SSE with per-agent timing telemetry.
 
-> **Defence walkthrough:** [Loom recording](https://www.loom.com/share/0bab3c411f05459c8d6bb514b26ad242)
+> **Deployment Link:** [HF spaces](https://huggingface.co/spaces/ashrithr07/finsight)
 
 ---
 
