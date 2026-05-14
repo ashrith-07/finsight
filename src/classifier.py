@@ -182,19 +182,48 @@ def _looks_like_risk_query(query: str) -> bool:
 
 
 # News routing safety net: matches macro / economic-calendar / sector / sentiment
-# phrasings that the LLM occasionally hands to ``market_research`` instead.
+# phrasings (and "news today/now/this week" / "what's happening with X" patterns)
+# that the LLM occasionally hands to ``market_research`` instead.
 _NEWS_OVERRIDE_RX = re.compile(
-    r"\b(sector\s+news|tech\s+news|fed\s+meeting|fomc|cpi\s+(release|data|print)?|"
+    r"\b("
+    r"sector\s+news|tech\s+news|fed\s+meeting|fomc|cpi\s+(release|data|print)?|"
     r"jobs?\s+report|payrolls?|economic\s+(calendar|events)|"
     r"earnings\s+(calendar|this\s+week|season)|rate\s+decision|"
     r"overall\s+(sentiment|market\s+mood)|market\s+sentiment|"
-    r"bullish\s+or\s+bearish|news\s+sentiment)\b",
+    r"bullish\s+or\s+bearish|news\s+sentiment|"
+    r"news\s+(today|now|this\s+week|update|digest|summary)|"
+    r"news\s+headlines|latest\s+headlines|breaking\s+news|"
+    r"market\s+(headlines|movers)"
+    r")\b",
     re.IGNORECASE,
 )
 
 
 def _looks_like_news_query(query: str) -> bool:
     return bool(_NEWS_OVERRIDE_RX.search(query))
+
+
+# Report routing safety net: catches "generate/create/build/give me a report",
+# "pdf report", "markdown report", "summary report" etc. The pre-classifier
+# never sees ``report_generator`` (it's not in AGENT_LABELS) so this override
+# is the *only* deterministic path into the report agent without an LLM call.
+_REPORT_OVERRIDE_RX = re.compile(
+    r"\b("
+    r"(generate|create|build|make|produce|prepare|give\s+me|send\s+me|email\s+me)"
+    r"\s+(a|an|the|me\s+a)?\s*\w*\s*(pdf|markdown|portfolio|market|risk|stock|equity|"
+    r"summary|investment)?\s*reports?|"
+    r"(pdf|markdown)\s+reports?|"
+    r"portfolio\s+reports?|risk\s+reports?|market\s+reports?|stock\s+reports?|"
+    r"investment\s+reports?|generate\s+the\s+report|"
+    r"export\s+(to\s+)?(pdf|markdown)|"
+    r"download(?:able)?\s+report"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_report_query(query: str) -> bool:
+    return bool(_REPORT_OVERRIDE_RX.search(query))
 
 
 # Portfolio-management phrasings (rebalance, drift, tax-loss harvesting,
@@ -474,6 +503,19 @@ class IntentClassifier:
         risk_override = _looks_like_risk_query(query)
         news_override = _looks_like_news_query(query)
         portfolio_override = _looks_like_portfolio_query(query)
+        report_override = _looks_like_report_query(query)
+
+        # Report override wins over everything: the pre-classifier can't reach
+        # the report agent on its own (not in AGENT_LABELS), so a positive
+        # regex match must short-circuit the rest of the pipeline.
+        if report_override and not isinstance(self._llm, MockLLMClient):
+            return ClassifierResult(
+                intent=query,
+                agent="report_generator",
+                entities=Entity(tickers=_fallback_extract_tickers(query)),
+                safety_verdict="clean",
+                confidence=0.92,
+            )
 
         try:
             if not isinstance(self._llm, MockLLMClient):
@@ -519,9 +561,11 @@ class IntentClassifier:
 
             # Override only "soft" misroutes — never overrule explicit non-portfolio targets like
             # market_research or financial_planning that the LLM picked deliberately.
-            if risk_override and agent in {"portfolio_health", "general_query", "predictive_analysis"}:
+            if report_override and agent not in {"report_generator"}:
+                agent = "report_generator"
+            elif risk_override and agent in {"portfolio_health", "general_query", "predictive_analysis"}:
                 agent = "risk_assessment"
-            elif news_override and agent in {"market_research", "general_query"}:
+            elif news_override and agent in {"market_research", "general_query", "predictive_analysis"}:
                 agent = "financial_news"
             elif portfolio_override and agent in {"investment_strategy", "general_query"}:
                 agent = "portfolio_health"
@@ -544,25 +588,34 @@ class IntentClassifier:
             # (rate-limited, network failure, etc.). Overrides win first, then
             # we trust the pre-classifier even at low confidence (>0.15) since
             # any signal beats falling back to ``general_query``.
+            fallback_tickers = _fallback_extract_tickers(query)
+            if report_override:
+                return ClassifierResult(
+                    intent=query, agent="report_generator",
+                    entities=Entity(tickers=fallback_tickers),
+                    safety_verdict="clean", confidence=0.6,
+                )
             if risk_override:
                 return ClassifierResult(
-                    intent=query, agent="risk_assessment", entities=Entity(),
+                    intent=query, agent="risk_assessment",
+                    entities=Entity(tickers=fallback_tickers),
                     safety_verdict="clean", confidence=0.55,
                 )
             if news_override:
                 return ClassifierResult(
-                    intent=query, agent="financial_news", entities=Entity(),
+                    intent=query, agent="financial_news",
+                    entities=Entity(tickers=fallback_tickers),
                     safety_verdict="clean", confidence=0.55,
                 )
             if portfolio_override:
                 return ClassifierResult(
-                    intent=query, agent="portfolio_health", entities=Entity(),
+                    intent=query, agent="portfolio_health",
+                    entities=Entity(tickers=fallback_tickers),
                     safety_verdict="clean", confidence=0.55,
                 )
             try:
                 pre_agent, pre_conf = self._pre.predict(query)
                 if pre_conf >= 0.15:
-                    fallback_tickers = _fallback_extract_tickers(query)
                     return ClassifierResult(
                         intent=query, agent=pre_agent,
                         entities=Entity(tickers=fallback_tickers),

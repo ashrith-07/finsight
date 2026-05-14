@@ -1219,8 +1219,9 @@ async def custom_docs() -> dict:
                 ],
             },
             "system": {
-                "description": "Service introspection — health, agents, runtime metrics.",
+                "description": "Service introspection — health, agents, runtime metrics, UI.",
                 "endpoints": [
+                    {"method": "GET", "path": "/", "notes": "Single-page dashboard."},
                     {"method": "GET", "path": "/health"},
                     {"method": "GET", "path": "/users"},
                     {"method": "GET", "path": "/agents"},

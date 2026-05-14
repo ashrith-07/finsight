@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,117 @@ from src.models import SafetyVerdict
 logger = get_logger("safety")
 
 _BLOCK_THRESHOLD = 0.55
+
+
+# Educational / academic phrasings — when present, skip the regex prefilter
+# and let the ML classifier decide. Prevents "what is insider trading" and
+# "explain market manipulation textbook" from being false-positive-blocked.
+_EDUCATION_RX = re.compile(
+    r"\b("
+    r"what\s+(is|are|does|do)|explain|define|describe|"
+    r"history\s+of|famous\s+(case|examples)|examples\s+of|"
+    r"textbook|academic|lecture|definition\s+of|primer\s+on|tutorial\s+on|"
+    r"under\s+(regulation|the\s+law)|legally\s+speaking|"
+    r"in\s+plain\s+english"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+# High-precision regex prefilter. Catches obvious illicit phrasings the ML
+# model can miss when intent words are far apart. ML still handles the long
+# tail; regex is a guaranteed safety net for the demo-critical categories.
+_REGEX_HARDBLOCK = [
+    (
+        "insider_trading",
+        # Intentionally does *not* include the bare phrase "insider trading"
+        # because educational queries ("what is insider trading", "famous
+        # insider trading cases") must remain allowed.
+        re.compile(
+            r"\b("
+            r"insider\s+info(?:rmation)?|"
+            r"insider\s+tip|"
+            r"inside\s+information\s+(?:on|about|for)|"
+            r"\bmnpi\b|material\s+non[-\s]?public\s+information|"
+            r"front[-\s]?run(?:ning)?\s+(?:the\s+)?(?:announcement|news|earnings|filing)|"
+            r"trad(?:e|ing)\s+(?:on|using)\s+(?:insider|inside|leaked|tipped|confidential|non[-\s]?public)|"
+            r"trad(?:e|ing)\s+based\s+on\s+(?:insider|inside|leaked|confidential|non[-\s]?public)|"
+            r"how\s+(?:do\s+i|to|can\s+i)\s+(?:do\s+|commit\s+)?insider\s+trad(?:e|ing)|"
+            r"help\s+me\s+(?:do|commit|execute|profit\s+from)\s+insider\s+trad(?:e|ing)|"
+            r"(?:got|have)\s+(?:some\s+|a\s+)?inside\s+info"
+            r")\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "market_manipulation",
+        re.compile(
+            r"\b("
+            r"pump\s+and\s+dump|pump[-\s]?and[-\s]?dump|"
+            r"wash\s+trade|wash\s+trading|"
+            r"spoof(?:ing)?\s+(?:orders?|bids?|the\s+market)|"
+            r"manipulate\s+(?:the\s+)?(?:market|price|stock|tape)|"
+            r"market\s+manipulation|"
+            r"paint\s+the\s+tape|"
+            r"layering\s+orders?|"
+            r"corner(?:ing)?\s+the\s+(?:market|float)"
+            r")\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "money_laundering",
+        re.compile(
+            r"\b("
+            r"launder(?:ing)?\s+money|money\s+launder(?:ing)?|"
+            r"hide\s+(?:the\s+)?source\s+of\s+funds|"
+            r"smurf(?:ing)?\s+deposits?|"
+            r"structure?\s+(?:wires?|deposits?|transactions?)\s+(?:to\s+)?(?:avoid|under)\s+report|"
+            r"avoid\s+(?:ctr|sar)\s+report|"
+            r"conceal\s+origin\s+of\s+(?:funds|money)"
+            r")\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "guaranteed_returns",
+        re.compile(
+            r"\b("
+            r"guarantee(?:d|s)?\s+(?:returns?|profits?|roi|yields?|gains?|"
+            r"income|winners?|wins?|payouts?)|"
+            r"risk[-\s]?free\s+(?:return|profit|arbitrage|yield)|"
+            r"no\s+downside\s+(?:infinite|unlimited)\s+upside|"
+            r"cannot\s+lose\s+money|can\'?t\s+lose\s+money|"
+            r"100%\s+(?:guaranteed|safe)\s+return"
+            r")\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "sanctions_evasion",
+        re.compile(
+            r"\b("
+            r"evad(?:e|ing)\s+sanctions|sanctions?\s+evasion|"
+            r"bypass\s+(?:ofac|sanctions|swift\s+screening)|"
+            r"hide\s+(?:from\s+)?ofac|"
+            r"circumvent(?:ing)?\s+sanctions"
+            r")\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "fraud",
+        re.compile(
+            r"\b("
+            r"forge\s+(?:brokerage|bank|trade|account)\s+(?:statements?|documents?|confirmations?)|"
+            r"fabricate\s+(?:trade|account|nav|balance)\s+(?:confirmations?|statements?|reports?)|"
+            r"falsify\s+(?:financial|brokerage|trading)\s+(?:documents?|statements?|reports?)|"
+            r"fake\s+(?:kyc|brokerage|trading)\s+(?:documents?|statements?)"
+            r")\b",
+            re.IGNORECASE,
+        ),
+    ),
+]
 
 
 class SafetyGuard:
@@ -350,6 +462,18 @@ class SafetyGuard:
         text = query.strip()
         if not text:
             return SafetyVerdict(blocked=False, category="clean", message="")
+
+        # Regex prefilter — high-precision catches that the ML may miss for
+        # short, direct illicit phrasings. Educational / textbook phrasings
+        # are exempted to keep the long-tail of legitimate questions allowed.
+        if not _EDUCATION_RX.search(text):
+            for category, pattern in _REGEX_HARDBLOCK:
+                if pattern.search(text):
+                    return SafetyVerdict(
+                        blocked=True,
+                        category=category,
+                        message=self.BLOCK_MESSAGES[category],
+                    )
 
         clf = self._pipeline.named_steps["clf"]
         proba = self._pipeline.predict_proba([text])[0]

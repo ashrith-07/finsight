@@ -856,9 +856,11 @@ class ValuraAgnoTeam:
             else:
                 return await self._fallback.run(classifier_result, user, query=query)
 
-            # If the Agno path returned no usable content, fall back to the
-            # deterministic orchestrator so the user still gets a real answer.
-            if self._is_empty_team_response(resp):
+            # If the Agno path returned no usable content (or an error-shaped
+            # one — e.g. "Connection error." when Groq is unreachable), fall
+            # back to the deterministic orchestrator so the user still gets a
+            # real answer with rich numbers.
+            if resp is None or self._is_empty_team_response(resp):
                 logger.warning(
                     "agno_team_empty_response_fallback",
                     extra={"agent": agent, "intent": intent},
@@ -869,24 +871,65 @@ class ValuraAgnoTeam:
             logger.error("AgnoTeam error: %s", e)
             return await self._fallback.run(classifier_result, user, query=query)
 
-    @staticmethod
-    def _is_empty_team_response(resp: AgentResponse) -> bool:
+    # Short error-shaped texts that some Agno providers surface as ``content``
+    # when their underlying HTTP call fails (e.g. Groq rate-limit / network
+    # outage). Treated as empty so we transparently fall back to the
+    # deterministic orchestrator path.
+    _ERROR_CONTENT_MARKERS = (
+        "connection error",
+        "i encountered an error",
+        "i'm sorry",
+        "im sorry",
+        "an error occurred",
+        "rate limit",
+        "request failed",
+        "unauthorized",
+        "invalid api key",
+        "timeout",
+        "unable to assist",
+        "service unavailable",
+    )
+
+    @classmethod
+    def _is_empty_team_response(cls, resp: AgentResponse) -> bool:
         result = resp.result if isinstance(resp.result, dict) else None
         if result is None:
             return True
         content = result.get("content")
-        if isinstance(content, str):
-            return not content.strip()
-        return content is None
+        if content is None:
+            return True
+        if not isinstance(content, str):
+            return False
+        text = content.strip()
+        if not text:
+            return True
+        if len(text) <= 120:
+            lc = text.lower()
+            if any(marker in lc for marker in cls._ERROR_CONTENT_MARKERS):
+                return True
+        return False
+
+    @staticmethod
+    def _agno_response_failed(response: Any) -> bool:
+        """Treat Agno ``RunStatus.error`` (and any string ending in ERROR) as a failure."""
+        status = getattr(response, "status", None)
+        if status is None:
+            return False
+        try:
+            return str(getattr(status, "value", status)).upper().endswith("ERROR")
+        except Exception:
+            return False
 
     async def _run_portfolio_team(
         self, agent: str, user: dict, intent: str, entities: Entity,
-    ) -> AgentResponse:
+    ) -> AgentResponse | None:
         assert self._portfolio_team is not None
         prompt = self._build_portfolio_prompt(user, intent)
         start = time.perf_counter()
         response = await self._portfolio_team.arun(prompt, stream=False)
         wall_ms = int((time.perf_counter() - start) * 1000)
+        if self._agno_response_failed(response):
+            return None
         content = self._extract_content(response)
         meta = ExecutionMetadata(
             agents_ran=["portfolio_health", "risk_analysis", "news_agent"],
@@ -913,7 +956,7 @@ class ValuraAgnoTeam:
 
     async def _run_research_team(
         self, agent: str, intent: str, entities: Entity, user: dict,
-    ) -> AgentResponse:
+    ) -> AgentResponse | None:
         assert self._research_team is not None
         tickers = list(entities.tickers or [])
         prompt = (
@@ -923,6 +966,8 @@ class ValuraAgnoTeam:
         start = time.perf_counter()
         response = await self._research_team.arun(prompt, stream=False)
         wall_ms = int((time.perf_counter() - start) * 1000)
+        if self._agno_response_failed(response):
+            return None
         content = self._extract_content(response)
         meta = ExecutionMetadata(
             agents_ran=["market_research"],
@@ -948,7 +993,7 @@ class ValuraAgnoTeam:
 
     async def _run_news_direct(
         self, intent: str, entities: Entity, user: dict,
-    ) -> AgentResponse:
+    ) -> AgentResponse | None:
         assert self._news_agent is not None
         tickers = list(entities.tickers or [])
         prompt = (
@@ -958,6 +1003,8 @@ class ValuraAgnoTeam:
         start = time.perf_counter()
         response = await self._news_agent.arun(prompt, stream=False)
         wall_ms = int((time.perf_counter() - start) * 1000)
+        if self._agno_response_failed(response):
+            return None
         content = self._extract_content(response)
         meta = ExecutionMetadata(
             agents_ran=["news_agent"],
@@ -979,7 +1026,7 @@ class ValuraAgnoTeam:
 
     async def _run_report_direct(
         self, intent: str, entities: Entity, user: dict,
-    ) -> AgentResponse:
+    ) -> AgentResponse | None:
         assert self._report_agent is not None
         tickers = list(entities.tickers or [])
         prompt = (
@@ -990,6 +1037,8 @@ class ValuraAgnoTeam:
         start = time.perf_counter()
         response = await self._report_agent.arun(prompt, stream=False)
         wall_ms = int((time.perf_counter() - start) * 1000)
+        if self._agno_response_failed(response):
+            return None
         content = self._extract_content(response)
         meta = ExecutionMetadata(
             agents_ran=["report_generator"],

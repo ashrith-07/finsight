@@ -32,8 +32,11 @@ A production-grade FastAPI service that turns one user query into a parallel mul
                                                         │
                                                         ▼
                        ┌─────────────────────────────────────────────────────────────┐
-                       │  ValuraOrchestrator   (src/orchestrator.py)                 │
-                       │  asyncio.gather → fan out → collect timings → synthesise    │
+                       │  AgentRouter   (src/router.py)                              │
+                       │  primary: ValuraAgnoTeam (Agno coordinate/route teams)      │
+                       │  fallback: ValuraOrchestrator (deterministic asyncio.gather)│
+                       │  → auto-falls-back on missing key, RunStatus.error, or     │
+                       │    empty/short-error content from the LLM provider.        │
                        └─────────────────────────────────────────────────────────────┘
                                                         │
         ┌───────────────────┬──────────────────┬────────┴────────┬──────────────────┬───────────────────┐
@@ -54,7 +57,7 @@ A production-grade FastAPI service that turns one user query into a parallel mul
                        └─────────────────────────────────────────────────────────────┘
 ```
 
-A `/chat` request flows top-to-bottom: safety check → intent classification → orchestrator dispatch → fan-out across the relevant agents → synthesis → SSE stream with per-agent timings attached as `execution_metadata` on the final `result` event. The browser UI in `frontend/index.html` consumes the same stream and renders a live timeline of which agents ran in parallel, their durations and the wall-clock saving.
+A `/chat` request flows top-to-bottom: safety check → intent classification → router dispatch → either an Agno `Team.arun` (coordinate or route mode) or the deterministic `asyncio.gather` orchestrator → synthesis → SSE stream with per-agent timings attached as `execution_metadata` on the final `result` event. The Agno Team path *always* degrades to the deterministic orchestrator when no LLM key is configured, when Agno returns `RunStatus.error`, or when the content looks like a connection / rate-limit error — so the demo cannot fail because of an upstream LLM blip. The browser UI in `frontend/index.html` consumes the same stream and renders a live timeline of which agents ran in parallel, their durations and the wall-clock saving.
 
 ---
 
@@ -148,9 +151,47 @@ Every focused REST endpoint runs the same agent code as `/chat` but skips SSE st
 
 ---
 
+## Agno Team Coordination
+
+Two native Agno `Team` instances live in `src/orchestrator.py::ValuraAgnoTeam`:
+
+| Team | Mode | Members | Used for |
+|---|---|---|---|
+| `portfolio_team` | `coordinate` | `portfolio_agent`, `risk_agent`, `news_agent` | `portfolio_health`, `risk_assessment` |
+| `research_team` | `route` | `market_agent`, `news_agent`, `report_agent` | `market_research`, `predictive_analysis` |
+
+`coordinate` runs all members in parallel and synthesises their outputs through a strong leader model; `route` lets the leader pick the single best specialist. The `financial_news` and `report_generator` agents are also reachable directly through dedicated single-agent paths for the focused REST endpoints.
+
+Each agent is constructed with a real `model`, `tools` (the MCP toolkits), `role` and concrete `instructions`, and the team coordinator runs on a stronger model (`get_agno_model_strong`). On every Agno call the orchestrator inspects `response.status` and falls back to the deterministic path if it sees `RunStatus.error` or an error-shaped short string (e.g. `"Connection error."`) — guaranteeing the UI always renders a real, numeric response.
+
+---
+
+## Long-term Memory (`AgnoMemoryManager`)
+
+`src/session.py` exposes two complementary stores:
+
+- **`session_store`** — bounded in-memory deque (`MAX_TURNS = 10`) of recent turns, used by the classifier to resolve pronouns / vague references.
+- **`agno_memory`** — Agno's built-in `MemoryManager` with **persistent storage** that prefers SQLite, falls back to a JSON directory (`.agno_memory.json/`), then in-memory if neither is installable. Conversations are persisted as `UserMemory` records keyed by `user_id`, and surfaced into the portfolio prompt as `Known facts about this user:` so subsequent turns can build on past intent.
+
+The integration is fire-and-forget: `event_generator` reads memories before the agent runs and stores the new turn as a background task afterwards, so memory writes never block the SSE response.
+
+---
+
+## Structured JSON Logging
+
+`src/logging_config.py` installs a `JSONFormatter` that emits one structured JSON line per log event with a per-request **correlation ID** (`ContextVar`):
+
+```json
+{"timestamp":"2026-05-11T13:23:42Z","level":"INFO","correlation_id":"req_a47fc1d2","component":"valura.orchestrator","message":"agent=portfolio_health status=success duration=2840ms"}
+```
+
+The `correlation_id` is generated by `event_generator` and flows automatically through safety, classifier, router, orchestrator, agents and MCP toolkits via the `ContextVar`. To trace a request end-to-end: `grep correlation_id=req_a47fc1d2 server.log`. The same diagnostic info ships in `GET /metrics → "logging"`.
+
+---
+
 ## Parallelism
 
-The orchestrator uses **`asyncio.gather`** to fan out independent agent calls. A small wrapper (`_safe_run`) records each task's wall time, then `_build_exec_metadata` packs the per-task ms, the actual gather wall time and the *would-have-been* sequential sum into the `execution_metadata` field on the `AgentResponse`.
+The deterministic orchestrator uses **`asyncio.gather`** to fan out independent agent calls. A small wrapper (`_safe_run`) records each task's wall time, then `_build_exec_metadata` packs the per-task ms, the actual gather wall time and the *would-have-been* sequential sum into the `execution_metadata` field on the `AgentResponse`. The Agno Team path captures a single wall-clock measurement around `team.arun` and reports it with `parallel: true` since coordinate mode fans the work out under the hood.
 
 ### What it actually looks like
 
@@ -275,7 +316,7 @@ The 10-test suite trains the safety guard and pre-classifier on the bundled fixt
 
 ### Why Agno over LangGraph / CrewAI
 
-Agno's `Agent`, `Team` and `Toolkit` primitives are intentionally thin — closer to "structured glue around an LLM call" than the heavy DAG/state-machine abstractions of LangGraph or the role-playing layer of CrewAI. That's the right shape for this codebase because **the orchestrator's routing logic is imperative Python**, not graph-driven. Agno gives us tool-calling LLMs and MCP-style toolkits when we want them, but doesn't impose a runtime that has to be reasoned about separately. The result: I can call `agent.run()` directly *or* call `agent.as_agno_agent()` and let an LLM tool-call its way through the same toolkit — both paths share the underlying code.
+Agno's `Agent`, `Team` and `Toolkit` primitives are intentionally thin — closer to "structured glue around an LLM call" than the heavy DAG/state-machine abstractions of LangGraph or the role-playing layer of CrewAI. That's the right shape for this codebase because the **primary path is an Agno `Team` in `coordinate`/`route` mode** but I still want a deterministic Python fallback for resilience. Agno lets both coexist: `ValuraAgnoTeam` constructs two real teams (portfolio + research) with proper member roles, toolkits and instructions, while `ValuraOrchestrator` keeps the imperative `asyncio.gather` path alive for the no-key / provider-down case. Every agent is reachable three ways — through the team, directly via its async `run()` method (used by focused REST endpoints), or as an Agno `Agent` via `as_agno_agent()` for tool-calling LLMs — and all three share the underlying MCP code.
 
 ### Why MCP pattern over direct API calls
 
@@ -305,25 +346,33 @@ The same reasoning applies to the **two-stage intent classifier**: a TF-IDF + LR
 
 Zero infrastructure dependencies for reviewers and CI: clone, `pip install`, run tests. Access is **O(1)** per session id with a bounded deque (`MAX_TURNS = 10`). For production this is the obvious swap: a Redis-backed store with TTL per session, horizontal replicas and eviction under memory pressure. The async API (`get_prior_user_turns`, `add_turn`, `get_last_entities`) was kept deliberately small so the swap is a one-file change in `src/session.py`, no caller updates required.
 
+Long-term, cross-session memory is a different shape — it's facts about the user (risk tolerance, goals, concerns) that should persist beyond a single browser tab. That's why `AgnoMemoryManager` ships alongside: it uses Agno's native `MemoryManager` with a SQLite → JSON → in-memory backend cascade, so reviewers without `sqlalchemy` installed still get cross-session memory through the JSON fallback. The two stores coexist without overlap.
+
+### Why a deterministic fallback under the Agno Team
+
+LLM providers go down. Networks rate-limit. Free tiers throttle. A demo that depends entirely on `Groq.arun()` returning useful content is one outage away from a blank chat bubble. Every Agno call in `ValuraAgnoTeam` is wrapped in a status + content check: if the team returns `RunStatus.error`, empty content, or a short error-shaped string (`"Connection error."`, `"I'm sorry…"`, `"Rate limit…"`), the request transparently re-routes through `ValuraOrchestrator` which talks directly to yfinance and the analytics MCPs and produces the same `AgentResponse` shape with real numbers. The frontend cannot tell the difference — and that's the point.
+
 ---
 
 ## Repository Layout
 
 | Path | Role |
 |---|---|
-| `src/main.py` | FastAPI app, `/chat` SSE pipeline, 33 focused REST endpoints, metrics counters |
-| `src/orchestrator.py` | `ValuraOrchestrator` — fan-out + timing capture + synthesis |
-| `src/safety.py` | TF-IDF + LR safety guard |
-| `src/classifier.py` | Two-stage classifier (LR pre-classifier → LLM fallback) |
-| `src/router.py` | Routes `ClassifierResult` → orchestrator or `StubAgent` |
-| `src/agents/` | Five primary agents + stub fallback |
+| `src/main.py` | FastAPI app, `/chat` SSE pipeline, focused REST endpoints, metrics counters, memory wiring |
+| `src/orchestrator.py` | `ValuraAgnoTeam` (Agno coordinate/route teams) + `ValuraOrchestrator` (deterministic fallback) |
+| `src/router.py` | Picks the Agno Team primary path, falls back to `ValuraOrchestrator` / `StubAgent` |
+| `src/safety.py` | TF-IDF + LR safety guard with a high-precision regex prefilter (insider, manipulation, laundering, guaranteed-returns, fraud) and an `_EDUCATION_RX` whitelist |
+| `src/classifier.py` | Two-stage classifier (LR pre-classifier → LLM fallback) with regex overrides for risk / news / portfolio / report queries |
+| `src/agents/` | Five primary agents + stub fallback; each agent ships an internal Agno `Agent` exposed via `as_agno_agent()` |
 | `src/mcp/` | Five MCP toolkit servers (Agno `Toolkit` subclasses) |
-| `src/llm/` | `LLMClient` ABC + Groq, OpenAI, Mock and SmartMock implementations |
+| `src/llm/` | `LLMClient` ABC + Groq, OpenAI, Mock and SmartMock; `agno_model.py` returns Agno-native `OpenAIChat` / `Groq` model objects |
 | `src/models.py` | Pydantic schemas (incl. `AgentResponse`, `ExecutionMetadata`) |
-| `src/session.py` | In-memory session store + duplicate-query cache |
+| `src/session.py` | In-session deque + query cache + **`AgnoMemoryManager`** (SQLite → JsonDb → InMemoryDb) |
+| `src/logging_config.py` | Structured JSON logging with correlation-ID `ContextVar` |
 | `frontend/index.html` | Single-page UI with tabbed Ecosystem / API / Metrics panels |
 | `fixtures/` | Labelled queries + user profiles used by tests and the UI selector |
 | `tests/` | pytest suite (passes without any API key) |
 | `reports/` | Generated portfolio / market / risk reports (gitignored runtime output) |
+| `.agno_memory.json/` | Persistent long-term memory (gitignored) |
 
 Assignment brief and rubric context remain in [`ASSIGNMENT.md`](ASSIGNMENT.md).
