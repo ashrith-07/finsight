@@ -33,7 +33,7 @@ DISCLAIMER = (
 )
 
 RISK_REACT_INSTRUCTIONS = [
-    "You are a Portfolio Risk Analyst for Valura AI.",
+    "You are a Portfolio Risk Analyst for Finsight AI.",
     "Always fetch roughly one year of historical prices (via tools) before estimating VaR.",
     "Run all five stress-test scenarios: 2008 financial crisis, 2020 COVID crash, 2022 rate hikes, dot-com bubble, and a mild correction.",
     "Flag any pairwise position correlation above 0.7 as dangerous.",
@@ -226,7 +226,7 @@ class RiskAnalysisAgent:
                 )
         lines.append(
             "\nUse tools to build risk metrics, then respond with ONE minified JSON object "
-            "matching the shape produced by Valura's risk engine: include disclaimer (string), "
+            "matching the shape produced by Finsight's risk engine: include disclaimer (string), "
             "currency, portfolio_value, and either metrics (full book) or focused keys "
             "(var, stress_tests, significant_correlations, etc.) plus observations as "
             "list of {severity, text} objects and sub_intent."

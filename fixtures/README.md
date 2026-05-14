@@ -1,6 +1,6 @@
 # Fixtures
 
-Sample user-side data for the Valura AI assignment.
+Sample user-side data for the Finsight AI assignment.
 
 You will not find market data, prices, sector classifications, or benchmarks here. Get those from MCP servers, the `yfinance` package, or any source you choose. **Do not hardcode market data into your code.**
 

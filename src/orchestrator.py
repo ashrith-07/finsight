@@ -32,7 +32,7 @@ from src.models import (
 logger = get_logger("orchestrator")
 
 
-class ValuraOrchestrator:
+class FinsightOrchestrator:
     """Coordinates portfolio, market, risk, news, and report flows; delegates unknown agents to ``StubAgent``."""
 
     PARALLEL_PAIRS = {
@@ -68,7 +68,7 @@ class ValuraOrchestrator:
                 return None
             try:
                 self._team = Team(
-                    name="valura_team",
+                    name="finsight_team",
                     model=model,
                     members=[
                         self._risk.as_agno_agent(),
@@ -76,7 +76,7 @@ class ValuraOrchestrator:
                         self._report.as_agno_agent(),
                     ],
                     instructions=(
-                        "You coordinate risk analytics, live news, and report rendering for Valura. "
+                        "You coordinate risk analytics, live news, and report rendering for Finsight. "
                         "Delegate specialised work to members; never contradict numerical outputs "
                         "computed by tools."
                     ),
@@ -95,11 +95,11 @@ class ValuraOrchestrator:
             if model is None:
                 return None
             self._meta_agent = Agent(
-                name="valura_orchestrator",
+                name="finsight_orchestrator",
                 model=model,
                 tools=[],
                 instructions=(
-                    "You are the Valura orchestrator meta-agent. Runtime routing is handled in "
+                    "You are the Finsight orchestrator meta-agent. Runtime routing is handled in "
                     "Python; this object exists for ecosystem tooling compatibility only."
                 ),
             )
@@ -686,8 +686,8 @@ def _pop_timings(eco: dict[str, Any]) -> tuple[dict[str, int], float]:
     return timings, wall
 
 
-class ValuraAgnoTeam:
-    """Native Agno ``Team`` coordinator with deterministic ``ValuraOrchestrator`` fallback.
+class FinsightAgnoTeam:
+    """Native Agno ``Team`` coordinator with deterministic ``FinsightOrchestrator`` fallback.
 
     Two teams are created up-front:
       * ``portfolio_team`` runs in ``coordinate`` mode (this Agno build's analogue of
@@ -696,7 +696,7 @@ class ValuraAgnoTeam:
         the team leader picks the single best specialist.
 
     When no ``OPENAI_API_KEY`` / ``GROQ_API_KEY`` is configured, every call short-circuits
-    to ``ValuraOrchestrator`` so existing tests and the no-key demo path still work.
+    to ``FinsightOrchestrator`` so existing tests and the no-key demo path still work.
     """
 
     PORTFOLIO_AGENTS = ("portfolio_health", "risk_assessment")
@@ -707,7 +707,7 @@ class ValuraAgnoTeam:
         from src.llm.agno_model import get_agno_model, get_agno_model_strong
 
         self._llm = llm or get_llm_client()
-        self._fallback = ValuraOrchestrator(self._llm)
+        self._fallback = FinsightOrchestrator(self._llm)
         self._stub = StubAgent()
 
         model = get_agno_model()
@@ -799,7 +799,7 @@ class ValuraAgnoTeam:
                 model=strong,
                 members=[portfolio_agent, risk_agent, news_agent],
                 instructions=[
-                    "You coordinate a team of financial specialists for Valura AI.",
+                    "You coordinate a team of financial specialists for Finsight AI.",
                     "For portfolio queries every specialist analyses in parallel.",
                     "Synthesise their outputs into one unified response.",
                     "The portfolio analyst handles holdings and performance.",
@@ -828,7 +828,7 @@ class ValuraAgnoTeam:
             self._news_agent = news_agent
             self._report_agent = report_agent
         except Exception as e:
-            logger.warning("ValuraAgnoTeam construction failed: %s", e)
+            logger.warning("FinsightAgnoTeam construction failed: %s", e)
             self._available = False
 
     async def run(
@@ -1102,4 +1102,4 @@ class ValuraAgnoTeam:
         return text[:200] if text else "Team response completed."
 
 
-__all__ = ["ValuraOrchestrator", "ValuraAgnoTeam"]
+__all__ = ["FinsightOrchestrator", "FinsightAgnoTeam"]

@@ -79,10 +79,10 @@ def setup_logging() -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a namespaced logger. Names starting with ``valura.`` are kept as-is."""
-    if name.startswith("valura."):
+    """Return a namespaced logger. Names starting with ``finsight.`` are kept as-is."""
+    if name.startswith("finsight."):
         return logging.getLogger(name)
-    return logging.getLogger(f"valura.{name}")
+    return logging.getLogger(f"finsight.{name}")
 
 
 def new_correlation_id() -> str:

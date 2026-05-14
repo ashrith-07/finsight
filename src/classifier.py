@@ -241,7 +241,14 @@ _PORTFOLIO_OVERRIDE_RX = re.compile(
     r"target\s+(weight|allocation)\s+drift|drift\s+from\s+target|"
     r"tax[\s-]?loss\s+harvest\w*|harvest\w*\s+(my\s+)?losses?|"
     r"sector\s+concentration|"
-    r"am\s+i\s+diversif\w*"
+    r"am\s+i\s+diversif\w*|"
+    # Dividend / income queries — these are portfolio_health/dividend_income,
+    # not report_generator (the LLM occasionally confuses them because reports
+    # *include* dividend sections).
+    r"dividend\s+(income|yield|payment|forecast|projection)|"
+    r"how\s+much\s+(am\s+i\s+|do\s+i\s+)?(earn(ing)?|receiv(e|ing)|collect(ing)?)\s+in\s+dividends?|"
+    r"dividend\s+income\s+(am|do)\s+i|"
+    r"(sector|geographic|geographical|regional|country)\s+(exposure|allocation|breakdown|mix)"
     r")\b",
     re.IGNORECASE,
 )
@@ -567,7 +574,13 @@ class IntentClassifier:
                 agent = "risk_assessment"
             elif news_override and agent in {"market_research", "general_query", "predictive_analysis"}:
                 agent = "financial_news"
-            elif portfolio_override and agent in {"investment_strategy", "general_query"}:
+            elif portfolio_override and agent in {
+                "investment_strategy",
+                "general_query",
+                "report_generator",
+                "predictive_analysis",
+                "risk_assessment",
+            }:
                 agent = "portfolio_health"
 
             intent = str(payload.get("intent") or "unknown").strip() or "unknown"

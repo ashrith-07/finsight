@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Valura AI — Multi-Agent Financial Intelligence</title>
+  <title>Finsight AI — Multi-Agent Financial Intelligence</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -733,7 +733,7 @@
   <main class="chat panel">
     <div class="header-row">
       <div>
-        <h1><span class="accent">Valura</span> AI</h1>
+        <h1><span class="accent">Finsight</span> AI</h1>
         <div class="subtitle">Multi-Agent Financial Intelligence</div>
       </div>
       <div class="toolbar">
@@ -1190,6 +1190,19 @@
         }
 
         await consumeSse(res.body, {
+          onProgress: (jsonStr) => {
+            const p = safeJson(jsonStr) || {};
+            const label = p.label || p.stage || 'working…';
+            pushLog(label, false);
+            if (p.stage === 'dispatch' && p.agent) {
+              const reconciled = predictAgents(query);
+              if (!reconciled.includes(p.agent)) reconciled.unshift(p.agent);
+              for (const a of reconciled) setAgentState(a, 'running');
+            }
+            if (p.stage === 'agent_working' && typeof p.elapsed_s === 'number') {
+              badgeEl.textContent = `working ${p.elapsed_s.toFixed(1)}s`;
+            }
+          },
           onDelta: (chunk) => {
             appendDeltaWithFade(bodyEl, chunk);
             scrollChat();
@@ -1247,19 +1260,35 @@
         return ['report_generator', 'portfolio_health'];
       }
       // Risk
-      if (has('risk', 'stress test', 'var', 'drawdown', 'what if', 'crash', 'tail', 'worst case')) {
+      if (has('risk', 'stress test', 'var', 'drawdown', 'what if', 'crash', 'tail', 'worst case',
+              'volatility', 'beta', 'sharpe', 'correlation')) {
         return ['risk_analysis', 'portfolio_health', 'financial_news'];
       }
-      // Market research (single ticker / compare)
-      if (has('price', 'compare', 'tell me about', 'how is ', 'how are ', 'news on', 'stock', 'shares')) {
+      // News (broader patterns — sector / market / sentiment / today / now / headlines)
+      if (has('news today', 'news now', 'latest news', 'breaking news', 'headlines',
+              'fed meeting', 'fomc', 'cpi', 'economic calendar', 'earnings calendar',
+              'market sentiment', 'sector news', 'tech news', 'news digest')) {
+        return ['financial_news'];
+      }
+      // Market research (single ticker / compare / fundamentals / options)
+      if (has('price', 'compare', 'tell me about', 'how is ', 'how are ', 'news on', 'stock', 'shares',
+              'fundamentals', 'pe ratio', 'p/e', 'market cap', 'options activity', '52 week',
+              'moving average', 'technical')) {
         return ['market_research', 'financial_news'];
       }
-      // Portfolio health (default for portfolio queries)
-      if (has('portfolio', 'holdings', 'diversified', 'concentration', 'positions', 'beating')) {
+      // Portfolio health (broadened: includes sector / sector exposure / geographic / dividend
+      // / rebalance / tax-loss / drift / allocation / performance / return / gain / loss /
+      // exposure phrasings that should still be portfolio_health)
+      if (has('portfolio', 'holdings', 'diversified', 'concentration', 'positions', 'beating',
+              'sector', 'sector exposure', 'geographic', 'geographical', 'dividend', 'dividends',
+              'rebalance', 'tax loss', 'tax-loss', 'drift', 'allocation', 'performance',
+              'how much have i', 'how much did i', 'my return', 'my gain', 'my loss',
+              'my exposure', 'my book', 'benchmark', 's&p')) {
         return ['portfolio_health', 'risk_analysis', 'financial_news'];
       }
-      // Fallback — light up nothing for general queries
-      return [];
+      // Final fallback — assume portfolio_health since this is a wealth app. Better to
+      // animate something than to leave the user staring at "thinking" with no signal.
+      return ['portfolio_health'];
     }
 
     /**
@@ -1297,7 +1326,8 @@
         else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
       }
       const data = dataLines.join('\n');
-      if (event === 'delta' && h.onDelta) h.onDelta(data);
+      if (event === 'progress' && h.onProgress) h.onProgress(data);
+      else if (event === 'delta' && h.onDelta) h.onDelta(data);
       else if (event === 'result' && h.onResult) h.onResult(data);
       else if (event === 'error' && h.onError) h.onError(data);
       else if (event === 'done' && h.onDone) h.onDone();

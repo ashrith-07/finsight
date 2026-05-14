@@ -1,5 +1,5 @@
 # =============================================================================
-# Valura AI — Team Lead Assignment — Core Dependencies
+# Finsight AI — Team Lead Assignment — Core Dependencies
 # =============================================================================
 # This is the minimal set we ship. Add what you need; justify additions in your README.
 

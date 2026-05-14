@@ -44,4 +44,5 @@ reports/*
 # Agno long-term memory store (per-environment, never committed)
 .agno_memory.db
 .agno_memory.json
-.agno_memory.json/
+.agno_memory.json/.env
+.agno_memory.db

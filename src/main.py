@@ -30,7 +30,7 @@ from src.logging_config import (
 )
 from src.mcp import calculator_mcp, portfolio_analytics_mcp, yfinance_mcp
 from src.models import AgentResponse, ChatRequest, PortfolioHealthResult
-from src.orchestrator import ValuraOrchestrator  # noqa: F401  (re-exported for callers)
+from src.orchestrator import FinsightOrchestrator  # noqa: F401  (re-exported for callers)
 from src.router import AgentRouter
 from src.safety import check as safety_check
 from src.session import ConversationTurn, agno_memory, query_cache, session_store
@@ -125,7 +125,7 @@ async def lifespan(app: FastAPI):
             "phase": "startup",
             "agents": 5,
             "mcp_servers": 5,
-            "orchestrator": "ValuraOrchestrator",
+            "orchestrator": "FinsightOrchestrator",
             "pipeline_timeout_s": PIPELINE_TIMEOUT,
         },
     )
@@ -137,7 +137,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Valura AI Microservice",
+    title="Finsight AI Microservice",
     description="AI co-investor agent ecosystem",
     version="0.1.0",
     lifespan=lifespan,
@@ -180,43 +180,237 @@ def _pick_lead_observation(observations: list) -> str:
     return ""
 
 
+_DISCLAIMER_SUFFIX = (
+    "This is informational only and not investment advice. "
+    "Consult a licensed financial advisor before acting on any signal."
+)
+
+
+def _collect_observations(obs_list: list, limit: int = 3) -> list[str]:
+    """Pick up to ``limit`` substantive observation texts (skipping housekeeping)."""
+    out: list[str] = []
+    for o in obs_list or []:
+        text = o.get("text") if isinstance(o, dict) else getattr(o, "text", "")
+        text = str(text or "").strip()
+        if text and not _is_housekeeping(text) and text not in out:
+            out.append(text)
+            if len(out) >= limit:
+                break
+    return out
+
+
+def _market_research_summary(result: dict) -> str:
+    """Stream a multi-sentence brief for market_research results."""
+    mr = result.get("market_research") or {}
+    news = result.get("market_news") or {}
+    tickers = ", ".join(mr.get("tickers") or []) or "the requested instruments"
+    pieces: list[str] = []
+    snaps = mr.get("snapshots") or []
+    if snaps:
+        bits = []
+        for s in snaps[:3]:
+            t = s.get("ticker", "")
+            price = s.get("price")
+            chg = s.get("change_pct")
+            if price is not None and chg is not None:
+                bits.append(f"{t} ${price:,.2f} ({chg:+.2f}%)")
+            elif price is not None:
+                bits.append(f"{t} ${price:,.2f}")
+        if bits:
+            pieces.append("Live tape: " + "; ".join(bits) + ".")
+    else:
+        pieces.append(f"Pulled market research for {tickers}; live quotes were unavailable from the data feed.")
+    obs = _collect_observations(mr.get("observations") or [], limit=2)
+    pieces.extend(obs)
+    summary = (news.get("summary") or "").strip()
+    if summary and "no recent news" not in summary.lower():
+        pieces.append(summary)
+    elif news.get("total_results", 0) == 0:
+        pieces.append(
+            "No fresh news articles surfaced for these names in the current window — markets may be quiet."
+        )
+    disc = str(mr.get("disclaimer") or "").strip() or _DISCLAIMER_SUFFIX
+    pieces.append(disc)
+    return " ".join(p for p in pieces if p)
+
+
+def _risk_summary(result: dict) -> str:
+    """Stream a multi-sentence brief for risk_assessment results."""
+    risk = result.get("risk_analysis") or {}
+    ph = result.get("portfolio_health") or {}
+    pieces: list[str] = []
+    var = risk.get("var") or {}
+    one_d_95 = var.get("one_day_95")
+    one_d_99 = var.get("one_day_99")
+    sharpe = risk.get("sharpe_ratio_annualised")
+    mdd = risk.get("max_drawdown_pct")
+    if any(v is not None for v in (one_d_95, one_d_99, sharpe, mdd)):
+        pieces.append(
+            "1-day VaR: ${:,.0f} at 95% / ${:,.0f} at 99%. "
+            "Sharpe ≈ {:.2f}; trailing max drawdown {:+.2f}%.".format(
+                float(one_d_95 or 0.0),
+                float(one_d_99 or 0.0),
+                float(sharpe or 0.0),
+                float(mdd or 0.0),
+            )
+        )
+    conc = (ph.get("concentration_risk") or {}).get("top_position_pct")
+    flag = (ph.get("concentration_risk") or {}).get("flag")
+    if conc is not None and flag:
+        pieces.append(
+            f"Concentration check: top position is {float(conc):.1f}% of NAV (flag: {flag})."
+        )
+    stress = risk.get("stress_tests") or []
+    if stress:
+        worst = min(stress, key=lambda s: s.get("portfolio_impact_pct", 0.0))
+        pieces.append(
+            "Worst stress scenario — {scen}: {pct:+.2f}%.".format(
+                scen=worst.get("scenario") or worst.get("name") or "historical replay",
+                pct=float(worst.get("portfolio_impact_pct", 0.0)),
+            )
+        )
+    sig_corr = risk.get("significant_correlations") or {}
+    if sig_corr:
+        first_pair = next(iter(sig_corr.items()))
+        pieces.append(
+            f"Notable correlation cluster: {first_pair[0]} (ρ ≈ {float(first_pair[1]):.2f})."
+        )
+    pieces.extend(_collect_observations(risk.get("observations") or [], limit=2))
+    pieces.append(_DISCLAIMER_SUFFIX)
+    return " ".join(p for p in pieces if p)
+
+
+def _news_summary(result: dict) -> str:
+    """Stream a multi-sentence brief for financial_news results."""
+    news = result.get("market_news") or result
+    if not isinstance(news, dict):
+        return _DISCLAIMER_SUFFIX
+    pieces: list[str] = []
+    articles = news.get("articles") or []
+    sentiment = news.get("sentiment_counts") or {}
+    summary = (news.get("summary") or "").strip()
+    if summary:
+        pieces.append(summary)
+    if articles:
+        pos = sentiment.get("positive", 0)
+        neg = sentiment.get("negative", 0)
+        neu = sentiment.get("neutral", 0)
+        pieces.append(
+            f"Sentiment skew across {len(articles)} headlines: {pos} positive, {neg} negative, {neu} neutral."
+        )
+        top = articles[:2]
+        for art in top:
+            title = (art.get("title") or "").strip()
+            source = (art.get("source") or "").strip()
+            if title:
+                pieces.append(
+                    f"• {title}" + (f" — {source}" if source else "")
+                )
+    else:
+        topics = news.get("topics") or []
+        tickers = news.get("tickers") or []
+        scope = []
+        if tickers:
+            scope.append(", ".join(tickers))
+        if topics:
+            scope.append("topics: " + ", ".join(topics))
+        scope_text = "; ".join(scope) if scope else "the requested filters"
+        pieces.append(
+            f"News feed returned no fresh items for {scope_text}. "
+            "This usually means a quiet news window or that upstream search rate limits hit — try again shortly."
+        )
+    pieces.append(_DISCLAIMER_SUFFIX)
+    return " ".join(p for p in pieces if p)
+
+
+def _report_summary(result: dict, fallback_message: str) -> str:
+    """Stream a real preview of the generated report rather than just the filename."""
+    report = result.get("report") or {}
+    filename = str(report.get("filename") or "").strip()
+    content = str(report.get("content") or "").strip()
+    pieces: list[str] = []
+    if filename:
+        pieces.append(f"Generated report **{filename}** — preview below.")
+    elif fallback_message:
+        pieces.append(fallback_message)
+    if content:
+        # Pick the executive-summary block (between the first H2 and the next H2)
+        # plus the first observation line so the user sees substance, not filenames.
+        lines = content.splitlines()
+        exec_start = None
+        for i, ln in enumerate(lines):
+            if ln.strip().lower().startswith("## executive summary"):
+                exec_start = i + 1
+                break
+        if exec_start is not None:
+            block: list[str] = []
+            for ln in lines[exec_start : exec_start + 12]:
+                if ln.strip().startswith("## "):
+                    break
+                if ln.strip():
+                    block.append(ln.strip(" -•").strip())
+            if block:
+                pieces.append("Executive summary: " + "; ".join(block) + ".")
+        else:
+            # No exec summary header — surface the first 4 non-empty lines.
+            preview = [ln.strip(" -•").strip() for ln in lines if ln.strip()][1:5]
+            if preview:
+                pieces.append("Highlights: " + "; ".join(preview) + ".")
+    pieces.append("Open the file from the Raw JSON pane or the reports/ directory for the full document.")
+    pieces.append(_DISCLAIMER_SUFFIX)
+    return " ".join(p for p in pieces if p)
+
+
 def _build_summary(response: AgentResponse) -> str:
     """
-    Build the streamed delta text. Rules:
-    - Agno Team / Agent path: result is ``{"content": "..."}`` — surface the team's
-      synthesised markdown directly.
-    - portfolio_health (ecosystem dict): ``ecosystem_summary`` + one substantive
-      observation + disclaimer. Never pick the auto-injected "benchmark unavailable"
-      obs as the lead — the orchestrator already mentions the benchmark numerically.
-    - Legacy single-result ``PortfolioHealthResult``: lead observation + disclaimer.
-    - Everything else: ``response.message`` (orchestrator builds these to be self-contained).
+    Build the streamed delta text. Each branch produces 30-80 words of substantive
+    content so the word-by-word streaming animation is visible and the user always
+    sees real information (not just a one-line "completed" message).
+    - Agno Team / Agent path: result is ``{"content": "..."}`` — surface directly.
+    - portfolio_health: ecosystem_summary + lead observation + disclaimer.
+    - market_research: live tape + observations + news summary + disclaimer.
+    - risk_assessment: VaR + concentration + worst stress + observations + disclaimer.
+    - financial_news: feed summary + sentiment skew + 1-2 headlines + disclaimer.
+    - report_generator: filename + executive-summary preview + disclaimer.
     """
     result = response.result
+    agent = response.agent
 
     if isinstance(result, dict):
         content = result.get("content")
         if isinstance(content, str) and content.strip():
             return content.strip()
 
-    if response.agent == "portfolio_health" and result is not None:
+    if agent == "portfolio_health" and result is not None:
         if isinstance(result, PortfolioHealthResult):
             lead = _pick_lead_observation(result.observations)
             return f"{lead} {result.disclaimer}".strip() if lead else result.disclaimer
-
         if isinstance(result, dict):
             nested = result.get("portfolio_health")
             if isinstance(nested, dict):
                 summ = str(result.get("ecosystem_summary") or "").strip()
-                lead = _pick_lead_observation(nested.get("observations") or [])
+                obs = _collect_observations(nested.get("observations") or [], limit=2)
                 disc = str(nested.get("disclaimer") or "")
-                pieces = [p for p in (summ, lead, disc) if p]
-                if pieces:
-                    return " ".join(pieces)
-            lead = _pick_lead_observation(result.get("observations") or [])
+                pieces = [summ, *obs, disc]
+                joined = " ".join(p for p in pieces if p).strip()
+                if joined:
+                    return joined
+            obs = _collect_observations(result.get("observations") or [], limit=2)
             disc = str(result.get("disclaimer") or "")
-            joined = " ".join(p for p in (lead, disc) if p)
-            if joined.strip():
+            joined = " ".join(p for p in (*obs, disc) if p).strip()
+            if joined:
                 return joined
+
+    if isinstance(result, dict):
+        if agent == "market_research":
+            return _market_research_summary(result)
+        if agent == "risk_assessment":
+            return _risk_summary(result)
+        if agent == "financial_news":
+            return _news_summary(result)
+        if agent == "report_generator":
+            return _report_summary(result, response.message or "")
+
     return response.message or "Response ready — see Raw JSON for full details."
 
 
@@ -245,6 +439,7 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
         )
         try:
             async with asyncio.timeout(PIPELINE_TIMEOUT):
+                yield _sse("progress", json.dumps({"stage": "safety", "label": "Checking safety guard…"}))
                 t_safety_start = time.monotonic()
                 verdict = safety_check(request.query)
                 t_safety = time.monotonic() - t_safety_start
@@ -265,6 +460,7 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                     )
                     return
 
+                yield _sse("progress", json.dumps({"stage": "classify", "label": "Classifying intent…"}))
                 cached = query_cache.get(request.session_id, request.query)
                 t_classify_start = time.monotonic()
                 if cached is not None:
@@ -293,11 +489,40 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                 user_memories = await agno_memory.get_user_memories(user_id)
                 user_with_memory = {**request.user, "_memories": user_memories}
 
+                yield _sse("progress", json.dumps({
+                    "stage": "dispatch",
+                    "label": f"Dispatching to {classifier_result.agent}…",
+                    "agent": classifier_result.agent,
+                }))
+
+                # Run the agent in a background task and emit heartbeat progress
+                # events every ~2s so the UI shows continuous activity instead of
+                # a long unexplained "thinking" state during slow LLM calls.
                 t_agent_start = time.monotonic()
-                agent_response = await router.route(
+                route_task = asyncio.create_task(router.route(
                     classifier_result, user_with_memory, query=request.query
-                )
+                ))
+                heartbeat_n = 0
+                while not route_task.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(route_task), timeout=2.0)
+                    except TimeoutError:
+                        heartbeat_n += 1
+                        elapsed_s = time.monotonic() - t_agent_start
+                        yield _sse("progress", json.dumps({
+                            "stage": "agent_working",
+                            "label": f"Agents working… ({elapsed_s:.1f}s)",
+                            "elapsed_s": round(elapsed_s, 2),
+                            "heartbeat": heartbeat_n,
+                        }))
+                agent_response = route_task.result()
                 t_agent = time.monotonic() - t_agent_start
+
+                yield _sse("progress", json.dumps({
+                    "stage": "synthesise",
+                    "label": "Synthesising response…",
+                    "agent": agent_response.agent,
+                }))
 
                 # Persist this turn as a long-term memory record (best-effort).
                 asyncio.create_task(
@@ -309,9 +534,18 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                 )
 
                 summary = _build_summary(agent_response)
+                # Per-word streaming delay paces the word-fade animation in the
+                # browser. With ``await asyncio.sleep(0)`` the SSE frames arrive
+                # in a single tick and the user perceives a burst rather than a
+                # stream. 25 ms × ~40 words ≈ 1 s of visible streaming, which is
+                # the right feel without dragging out short replies.
+                stream_delay_s = float(os.environ.get("STREAM_DELAY_MS", "25")) / 1000.0
                 for word in summary.split():
                     yield _sse("delta", word + " ")
-                    await asyncio.sleep(0)
+                    if stream_delay_s > 0:
+                        await asyncio.sleep(stream_delay_s)
+                    else:
+                        await asyncio.sleep(0)
 
                 yield _sse("result", agent_response.model_dump_json())
 
@@ -388,13 +622,13 @@ async def serve_frontend():
     if os.path.isfile(index_path):
         return FileResponse(index_path)
     return JSONResponse(
-        {"status": "ok", "service": "valura-ai", "ui": "frontend/index.html missing"}
+        {"status": "ok", "service": "finsight-ai", "ui": "frontend/index.html missing"}
     )
 
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "service": "valura-ai"}
+    return {"status": "ok", "service": "finsight-ai"}
 
 
 @app.get("/users")
@@ -432,7 +666,7 @@ async def list_agents() -> dict:
     """Lists agents in the ecosystem with coarse status."""
     return {
         "total_agents": 5,
-        "orchestrator": "ValuraOrchestrator",
+        "orchestrator": "FinsightOrchestrator",
         "memory": {
             "type": f"Agno Memory ({agno_memory.backend})",
             "enabled": agno_memory.enabled,
@@ -1049,7 +1283,7 @@ async def custom_docs() -> dict:
     }
 
     return {
-        "title": "Valura AI API Guide",
+        "title": "Finsight AI API Guide",
         "version": app.version,
         "base_url": "http://localhost:8000",
         "interactive_docs": "/docs",

@@ -100,7 +100,7 @@ class AgnoMemoryManager:
     keeps working without any external dependency.
     """
 
-    DEFAULT_DB_PATH = os.environ.get("VALURA_MEMORY_DB", ".agno_memory.db")
+    DEFAULT_DB_PATH = os.environ.get("FINSIGHT_MEMORY_DB", ".agno_memory.db")
 
     def __init__(self, db_path: str | None = None) -> None:
         self._enabled = False

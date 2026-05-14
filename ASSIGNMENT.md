@@ -1,10 +1,10 @@
-# Valura AI — Team Lead Project Assignment
+# Finsight AI — Team Lead Project Assignment
 
 ---
 
 ## Context
 
-Valura is a global wealth management platform. The AI microservice is the intelligence layer behind every AI interaction on the platform.
+Finsight is a global wealth management platform. The AI microservice is the intelligence layer behind every AI interaction on the platform.
 
 **The mission of this microservice is to be the AI co-investor for every user — especially novices.** It should help any investor, regardless of experience, do four things over the long arc of their financial life:
 

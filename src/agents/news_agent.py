@@ -21,7 +21,7 @@ from src.mcp import web_search_mcp, yfinance_mcp
 logger = get_logger("agents.news")
 
 NEWS_REACT_INSTRUCTIONS = [
-    "You are a Financial News Analyst for Valura AI.",
+    "You are a Financial News Analyst for Finsight AI.",
     "Search for news about each ticker mentioned.",
     "Search for broad market news even when tickers are present.",
     "Score each headline as positive, negative, or neutral.",

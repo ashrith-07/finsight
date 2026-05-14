@@ -122,7 +122,7 @@ class MarketResearchAgent:
                 model=model,
                 tools=[yfinance_mcp, web_search_mcp],
                 instructions=[
-                    "You are an expert market research analyst for Valura AI.",
+                    "You are an expert market research analyst for Finsight AI.",
                     "Fetch both price snapshot and company fundamentals for every ticker.",
                     "If multiple tickers, compare them side by side.",
                     "Always include 52-week high and low with distance from current price.",

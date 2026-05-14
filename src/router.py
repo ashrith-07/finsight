@@ -1,4 +1,4 @@
-"""Dispatch ``ClassifierResult`` through ``ValuraOrchestrator`` or taxonomy stubs."""
+"""Dispatch ``ClassifierResult`` through ``FinsightOrchestrator`` or taxonomy stubs."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from src.agents.stub import StubAgent
 from src.llm.base import LLMClient
 from src.logging_config import get_logger
 from src.models import AgentResponse, ClassifierResult
-from src.orchestrator import ValuraAgnoTeam, ValuraOrchestrator
+from src.orchestrator import FinsightAgnoTeam, FinsightOrchestrator
 
 logger = get_logger("router")
 
@@ -27,12 +27,12 @@ REPORT_INTENTS = frozenset({"financial_planning"})
 
 
 class AgentRouter:
-    """Primary path: ``ValuraAgnoTeam``. Falls back to ``ValuraOrchestrator`` automatically when no LLM key is configured."""
+    """Primary path: ``FinsightAgnoTeam``. Falls back to ``FinsightOrchestrator`` automatically when no LLM key is configured."""
 
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
-        self._orchestrator = ValuraOrchestrator(llm)
-        self._team = ValuraAgnoTeam(llm)
+        self._orchestrator = FinsightOrchestrator(llm)
+        self._team = FinsightAgnoTeam(llm)
         self._stub = StubAgent()
 
     async def route(

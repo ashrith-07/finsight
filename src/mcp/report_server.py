@@ -54,7 +54,7 @@ def _ascii(text: str) -> str:
 class _PDF(FPDF):
     def header(self):
         self.set_font("Helvetica", "B", 14)
-        self.cell(0, 8, "Valura AI — Report", ln=1)
+        self.cell(0, 8, "Finsight AI — Report", ln=1)
         self.set_draw_color(180, 180, 180)
         self.line(10, 20, 200, 20)
         self.ln(4)

@@ -652,7 +652,7 @@ class PortfolioHealthAgent:
                 model=model,
                 tools=[yfinance_mcp, portfolio_analytics_mcp, calculator_mcp],
                 instructions=[
-                    "You are an expert portfolio health analyst for Valura AI.",
+                    "You are an expert portfolio health analyst for Finsight AI.",
                     "Always fetch live prices before computing any metrics.",
                     "Always compute concentration risk — flag anything above 40% as high risk.",
                     "Always compare portfolio return against the user's preferred benchmark.",

@@ -1,1 +1,1 @@
-"""Valura AI service package."""
+"""Finsight AI service package."""

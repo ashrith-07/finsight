@@ -34,7 +34,7 @@ class StubAgent:
         "product_recommendation": "Product Recommendation agent is in development.",
         "predictive_analysis": "Predictive Analysis agent is in development.",
         "customer_support": (
-            "For platform support, please contact support@valura.ai or visit our help centre."
+            "For platform support, please contact support@finsight.ai or visit our help centre."
         ),
         "general_query": (
             "I'm here to help with financial questions. Could you be more specific about what you'd like to know?"

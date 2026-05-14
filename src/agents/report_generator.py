@@ -19,7 +19,7 @@ from src.mcp import portfolio_analytics_mcp, report_mcp, web_search_mcp, yfinanc
 logger = get_logger("agents.report_generator")
 
 REPORT_REACT_INSTRUCTIONS = [
-    "You are a Financial Report Generator for Valura AI.",
+    "You are a Financial Report Generator for Finsight AI.",
     "Generate comprehensive reports with all available data from tools.",
     "Always include an executive summary section first.",
     "Include a data table for all positions or tickers.",
