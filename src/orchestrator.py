@@ -741,6 +741,7 @@ class FinsightAgnoTeam:
                     "Compute concentration, performance, and benchmark comparison.",
                     "Provide plain-language observations.",
                 ],
+                structured_outputs=False,
             )
             risk_agent = Agent(
                 name="Risk Analyst",
@@ -753,6 +754,7 @@ class FinsightAgnoTeam:
                     "Identify dangerous position correlations above 0.7.",
                     "Calculate Sharpe ratio and explain it plainly.",
                 ],
+                structured_outputs=False,
             )
             market_agent = Agent(
                 name="Market Research Analyst",
@@ -765,6 +767,7 @@ class FinsightAgnoTeam:
                     "Compare multiple tickers when provided.",
                     "Highlight the most important metric for investors.",
                 ],
+                structured_outputs=False,
             )
             news_agent = Agent(
                 name="Financial News Analyst",
@@ -783,6 +786,7 @@ class FinsightAgnoTeam:
                     "Identify the most market-moving headlines.",
                     "Summarise in three sentences what matters most.",
                 ],
+                structured_outputs=False,
             )
             report_agent = Agent(
                 name="Report Generator",
@@ -795,6 +799,7 @@ class FinsightAgnoTeam:
                     "Include data tables for all quantitative information.",
                     "End every report with the regulatory disclaimer.",
                 ],
+                structured_outputs=False,
             )
 
             # ``coordinate`` is this Agno build's collaborate-style mode:

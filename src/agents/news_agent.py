@@ -134,6 +134,7 @@ class FinancialNewsAgent:
                 tools=[web_search_mcp, yfinance_mcp],
                 instructions=NEWS_REACT_INSTRUCTIONS,
                 markdown=False,
+                structured_outputs=False,
                 debug_mode=True,
             )
         except Exception as e:

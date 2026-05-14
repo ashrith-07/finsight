@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.agents.agno_react import coerce_pydantic
-from src.llm.agno_model import get_agno_model
+from src.llm.agno_model import agno_allows_structured_output_with_tools, get_agno_model
 from src.llm.base import LLMClient
 from src.logging_config import get_logger
 from src.mcp import calculator_mcp, portfolio_analytics_mcp, yfinance_mcp
@@ -647,25 +647,38 @@ class PortfolioHealthAgent:
             self._agno_react = None
             return None
         try:
-            self._agno_react = Agent(
-                name="Portfolio Health Analyst",
-                model=model,
-                tools=[yfinance_mcp, portfolio_analytics_mcp, calculator_mcp],
-                instructions=[
-                    "You are an expert portfolio health analyst for Finsight AI.",
-                    "Always fetch live prices before computing any metrics.",
-                    "Always compute concentration risk — flag anything above 40% as high risk.",
-                    "Always compare portfolio return against the user's preferred benchmark.",
-                    "Always include the regulatory disclaimer in every response.",
-                    "Surface the 1–2 most important insights, not every metric.",
-                    "Use plain language — your audience may not be finance experts.",
-                    "For empty portfolios return build guidance based on age and risk profile.",
-                ],
-                output_schema=PortfolioHealthResult,
-                structured_outputs=True,
-                markdown=False,
-                debug_mode=True,
-            )
+            instructions = [
+                "You are an expert portfolio health analyst for Finsight AI.",
+                "Always fetch live prices before computing any metrics.",
+                "Always compute concentration risk — flag anything above 40% as high risk.",
+                "Always compare portfolio return against the user's preferred benchmark.",
+                "Always include the regulatory disclaimer in every response.",
+                "Surface the 1–2 most important insights, not every metric.",
+                "Use plain language — your audience may not be finance experts.",
+                "For empty portfolios return build guidance based on age and risk profile.",
+            ]
+            if not agno_allows_structured_output_with_tools():
+                instructions = [
+                    *instructions,
+                    "After tool calls, respond with ONE minified JSON object matching "
+                    "PortfolioHealthResult: concentration_risk, performance, benchmark_comparison, "
+                    "observations (list of {severity,text}), disclaimer, optional build_guidance, "
+                    "sub_intent, extras — no markdown fences.",
+                ]
+            kw: dict[str, Any] = {
+                "name": "Portfolio Health Analyst",
+                "model": model,
+                "tools": [yfinance_mcp, portfolio_analytics_mcp, calculator_mcp],
+                "instructions": instructions,
+                "markdown": False,
+                "debug_mode": True,
+            }
+            if agno_allows_structured_output_with_tools():
+                kw["output_schema"] = PortfolioHealthResult
+                kw["structured_outputs"] = True
+            else:
+                kw["structured_outputs"] = False
+            self._agno_react = Agent(**kw)
         except Exception as e:
             logger.warning("Portfolio Agno Agent construction failed: %s", e)
             self._agno_react = None

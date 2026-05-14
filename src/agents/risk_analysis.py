@@ -198,6 +198,7 @@ class RiskAnalysisAgent:
                 tools=[yfinance_mcp, portfolio_analytics_mcp, calculator_mcp],
                 instructions=RISK_REACT_INSTRUCTIONS,
                 markdown=False,
+                structured_outputs=False,
                 debug_mode=True,
             )
         except Exception as e:

@@ -65,4 +65,20 @@ def make_agno_model() -> Optional[Any]:
     return get_agno_model()
 
 
-__all__ = ["get_agno_model", "get_agno_model_strong", "make_agno_model"]
+def agno_allows_structured_output_with_tools() -> bool:
+    """Whether Agno may combine ``output_schema`` + ``structured_outputs`` with ``tools``.
+
+    Groq returns HTTP 400: *json mode cannot be combined with tool/function calling*
+    when ``response_format`` is set alongside tools. :func:`get_agno_model` picks
+    OpenAI when ``OPENAI_API_KEY`` is set, otherwise Groq — only the OpenAI path
+    is safe for native structured tool runs.
+    """
+    return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+
+
+__all__ = [
+    "agno_allows_structured_output_with_tools",
+    "get_agno_model",
+    "get_agno_model_strong",
+    "make_agno_model",
+]

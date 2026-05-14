@@ -16,7 +16,7 @@ from agno.agent import Agent
 from pydantic import BaseModel
 
 from src.agents.agno_react import coerce_pydantic
-from src.llm.agno_model import get_agno_model
+from src.llm.agno_model import agno_allows_structured_output_with_tools, get_agno_model
 from src.llm.base import LLMClient
 from src.logging_config import get_logger
 from src.mcp import web_search_mcp, yfinance_mcp
@@ -117,23 +117,35 @@ class MarketResearchAgent:
             self._agno_react = None
             return None
         try:
-            self._agno_react = Agent(
-                name="Market Research Analyst",
-                model=model,
-                tools=[yfinance_mcp, web_search_mcp],
-                instructions=[
-                    "You are an expert market research analyst for Finsight AI.",
-                    "Fetch both price snapshot and company fundamentals for every ticker.",
-                    "If multiple tickers, compare them side by side.",
-                    "Always include 52-week high and low with distance from current price.",
-                    "Search for recent news about the company.",
-                    "Surface the most important metric for an investor to know.",
-                ],
-                output_schema=MarketResearchResult,
-                structured_outputs=True,
-                markdown=False,
-                debug_mode=True,
-            )
+            instructions = [
+                "You are an expert market research analyst for Finsight AI.",
+                "Fetch both price snapshot and company fundamentals for every ticker.",
+                "If multiple tickers, compare them side by side.",
+                "Always include 52-week high and low with distance from current price.",
+                "Search for recent news about the company.",
+                "Surface the most important metric for an investor to know.",
+            ]
+            if not agno_allows_structured_output_with_tools():
+                instructions = [
+                    *instructions,
+                    "After tool calls, respond with ONE minified JSON object matching "
+                    "MarketResearchResult: tickers, snapshots, company_info, observations, "
+                    "disclaimer, optional comparison_note/sub_intent/extras — no markdown fences.",
+                ]
+            kw: dict[str, Any] = {
+                "name": "Market Research Analyst",
+                "model": model,
+                "tools": [yfinance_mcp, web_search_mcp],
+                "instructions": instructions,
+                "markdown": False,
+                "debug_mode": True,
+            }
+            if agno_allows_structured_output_with_tools():
+                kw["output_schema"] = MarketResearchResult
+                kw["structured_outputs"] = True
+            else:
+                kw["structured_outputs"] = False
+            self._agno_react = Agent(**kw)
         except Exception as e:
             logger.warning("Market Agno Agent construction failed: %s", e)
             self._agno_react = None
