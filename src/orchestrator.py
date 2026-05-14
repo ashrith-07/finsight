@@ -846,17 +846,38 @@ class ValuraAgnoTeam:
 
         try:
             if agent in self.PORTFOLIO_AGENTS:
-                return await self._run_portfolio_team(agent, user, intent, entities)
-            if agent in self.RESEARCH_AGENTS:
-                return await self._run_research_team(agent, intent, entities, user)
-            if agent == "financial_news":
-                return await self._run_news_direct(intent, entities, user)
-            if agent == "report_generator":
-                return await self._run_report_direct(intent, entities, user)
-            return await self._fallback.run(classifier_result, user, query=query)
+                resp = await self._run_portfolio_team(agent, user, intent, entities)
+            elif agent in self.RESEARCH_AGENTS:
+                resp = await self._run_research_team(agent, intent, entities, user)
+            elif agent == "financial_news":
+                resp = await self._run_news_direct(intent, entities, user)
+            elif agent == "report_generator":
+                resp = await self._run_report_direct(intent, entities, user)
+            else:
+                return await self._fallback.run(classifier_result, user, query=query)
+
+            # If the Agno path returned no usable content, fall back to the
+            # deterministic orchestrator so the user still gets a real answer.
+            if self._is_empty_team_response(resp):
+                logger.warning(
+                    "agno_team_empty_response_fallback",
+                    extra={"agent": agent, "intent": intent},
+                )
+                return await self._fallback.run(classifier_result, user, query=query)
+            return resp
         except Exception as e:
             logger.error("AgnoTeam error: %s", e)
             return await self._fallback.run(classifier_result, user, query=query)
+
+    @staticmethod
+    def _is_empty_team_response(resp: AgentResponse) -> bool:
+        result = resp.result if isinstance(resp.result, dict) else None
+        if result is None:
+            return True
+        content = result.get("content")
+        if isinstance(content, str):
+            return not content.strip()
+        return content is None
 
     async def _run_portfolio_team(
         self, agent: str, user: dict, intent: str, entities: Entity,
@@ -1019,7 +1040,8 @@ class ValuraAgnoTeam:
 
     @staticmethod
     def _snippet(content: Any) -> str:
-        return str(content or "")[:200] if content is not None else "Team response completed."
+        text = str(content or "").strip()
+        return text[:200] if text else "Team response completed."
 
 
 __all__ = ["ValuraOrchestrator", "ValuraAgnoTeam"]

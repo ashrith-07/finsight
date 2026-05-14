@@ -180,14 +180,21 @@ def _pick_lead_observation(observations: list) -> str:
 def _build_summary(response: AgentResponse) -> str:
     """
     Build the streamed delta text. Rules:
-    - For portfolio_health (ecosystem dict): ecosystem_summary + ONE substantive observation + disclaimer.
-      Never pick the auto-injected "benchmark unavailable" obs as the lead — orchestrator
-      already mentions the benchmark numerically.
-    - For the legacy single-result PortfolioHealthResult shape (used by older paths/tests):
-      lead observation + disclaimer.
-    - Everything else: response.message (orchestrator builds these to be self-contained).
+    - Agno Team / Agent path: result is ``{"content": "..."}`` — surface the team's
+      synthesised markdown directly.
+    - portfolio_health (ecosystem dict): ``ecosystem_summary`` + one substantive
+      observation + disclaimer. Never pick the auto-injected "benchmark unavailable"
+      obs as the lead — the orchestrator already mentions the benchmark numerically.
+    - Legacy single-result ``PortfolioHealthResult``: lead observation + disclaimer.
+    - Everything else: ``response.message`` (orchestrator builds these to be self-contained).
     """
     result = response.result
+
+    if isinstance(result, dict):
+        content = result.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+
     if response.agent == "portfolio_health" and result is not None:
         if isinstance(result, PortfolioHealthResult):
             lead = _pick_lead_observation(result.observations)
@@ -200,11 +207,14 @@ def _build_summary(response: AgentResponse) -> str:
                 lead = _pick_lead_observation(nested.get("observations") or [])
                 disc = str(nested.get("disclaimer") or "")
                 pieces = [p for p in (summ, lead, disc) if p]
-                return " ".join(pieces)
+                if pieces:
+                    return " ".join(pieces)
             lead = _pick_lead_observation(result.get("observations") or [])
             disc = str(result.get("disclaimer") or "")
-            return " ".join(p for p in (lead, disc) if p)
-    return response.message
+            joined = " ".join(p for p in (lead, disc) if p)
+            if joined.strip():
+                return joined
+    return response.message or "Response ready — see Raw JSON for full details."
 
 
 @app.post("/chat")
