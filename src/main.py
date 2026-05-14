@@ -40,11 +40,14 @@ setup_logging()
 
 
 def _pipeline_timeout_s() -> float:
-    raw = os.environ.get("PIPELINE_TIMEOUT", "30")
+    # 90s default: Agno team coordinate mode runs 3 member agents each making
+    # multiple LLM calls, easily exceeding 30s on a free Groq tier. The
+    # deterministic fallback still completes in <10s if Agno fails or is cancelled.
+    raw = os.environ.get("PIPELINE_TIMEOUT", "90")
     try:
         return float(raw)
     except ValueError:
-        return 30.0
+        return 90.0
 
 
 PIPELINE_TIMEOUT = _pipeline_timeout_s()

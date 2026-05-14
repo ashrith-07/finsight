@@ -873,8 +873,9 @@ class ValuraAgnoTeam:
 
     # Short error-shaped texts that some Agno providers surface as ``content``
     # when their underlying HTTP call fails (e.g. Groq rate-limit / network
-    # outage). Treated as empty so we transparently fall back to the
-    # deterministic orchestrator path.
+    # outage) or when the run is cancelled (e.g. asyncio timeout reaching
+    # the team.arun coroutine). Treated as empty so we transparently fall
+    # back to the deterministic orchestrator path.
     _ERROR_CONTENT_MARKERS = (
         "connection error",
         "i encountered an error",
@@ -888,6 +889,12 @@ class ValuraAgnoTeam:
         "timeout",
         "unable to assist",
         "service unavailable",
+        "operation cancelled by user",
+        "operation canceled by user",
+        "request cancelled",
+        "request canceled",
+        "run cancelled",
+        "run canceled",
     )
 
     @classmethod
@@ -903,7 +910,7 @@ class ValuraAgnoTeam:
         text = content.strip()
         if not text:
             return True
-        if len(text) <= 120:
+        if len(text) <= 160:
             lc = text.lower()
             if any(marker in lc for marker in cls._ERROR_CONTENT_MARKERS):
                 return True
@@ -911,12 +918,14 @@ class ValuraAgnoTeam:
 
     @staticmethod
     def _agno_response_failed(response: Any) -> bool:
-        """Treat Agno ``RunStatus.error`` (and any string ending in ERROR) as a failure."""
+        """Failure = Agno ``RunStatus.error`` *or* ``RunStatus.cancelled`` / ``paused`` — anything
+        that means we shouldn't surface the team's content directly to the user."""
         status = getattr(response, "status", None)
         if status is None:
             return False
         try:
-            return str(getattr(status, "value", status)).upper().endswith("ERROR")
+            label = str(getattr(status, "value", status)).upper()
+            return label.endswith(("ERROR", "CANCELLED", "CANCELED", "PAUSED"))
         except Exception:
             return False
 
