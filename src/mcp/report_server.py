@@ -10,6 +10,7 @@ from agno.tools import Toolkit
 from fpdf import FPDF
 
 from src.logging_config import get_logger
+from src.runtime_paths import reports_dir
 
 logger = get_logger("mcp.report")
 
@@ -90,11 +91,11 @@ class ReportMCPServer(Toolkit):
     """Generates Markdown / PDF reports for portfolio, market and risk workflows."""
 
     name = "report_mcp"
-    OUTPUT_DIR = Path("reports")
 
-    def __init__(self) -> None:
+    def __init__(self, output_dir: Path | None = None) -> None:
         super().__init__(name="report_mcp", auto_register=False)
-        self.OUTPUT_DIR.mkdir(exist_ok=True)
+        self.OUTPUT_DIR = output_dir or reports_dir()
+        self.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         self.register(self.generate_portfolio_report)
         self.register(self.generate_market_report)
         self.register(self.generate_risk_report)

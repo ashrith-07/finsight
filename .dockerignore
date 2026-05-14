@@ -17,3 +17,7 @@ htmlcov
 .DS_Store
 tests
 .cursor
+
+# Do not bake local report outputs into the image
+reports/*.md
+reports/*.pdf

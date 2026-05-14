@@ -6,7 +6,8 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PORT=7860
+    PORT=7860 \
+    DATA_DIR=/app/data
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -18,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p reports
+RUN mkdir -p /app/data/reports reports
 
 EXPOSE 7860
 

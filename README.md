@@ -304,9 +304,19 @@ The single-page UI lives there. The right panel has three tabs:
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Override the default Groq model |
 | `OPENAI_API_KEY` | — | Used only if `GROQ_API_KEY` is absent |
 | `OPENAI_MODEL` / `LLM_MODEL` | `gpt-4o-mini` | OpenAI model id alias |
-| `PIPELINE_TIMEOUT` | `30` | Seconds per `/chat` SSE generator |
+| `PIPELINE_TIMEOUT` | `90` | Seconds per `/chat` SSE generator |
 | `LOG_LEVEL` | `INFO` | Root logging level |
 | `APP_ENV` | — | Set to `test` in CI if you branch on it |
+| `DATA_DIR` | project root | Writable root for reports + Agno SQLite (Dockerfile uses `/app/data`) |
+| `REPORTS_DIR` | `{DATA_DIR}/reports` | Generated PDF/Markdown artefacts |
+| `REPORT_RETENTION_HOURS` | `72` | Delete artefacts older than this age |
+| `REPORT_MAX_TOTAL_MB` | `256` | Total size cap for `reports/` (`off` / `0` disables) |
+| `REPORT_MAX_FILES` | `500` | Max artefact count (`off` / `0` disables) |
+| `REPORT_CLEANUP_INTERVAL_SEC` | `3600` | Background retention sweep interval |
+| `FINSIGHT_MEMORY_DB` | `{DATA_DIR}/.agno_memory.db` | Agno long-term memory backing file |
+| `CORS_ORIGINS` | — | Comma-separated browser origins; empty = same-origin only |
+
+**Operational endpoints:** `GET /api/reports` lists artefacts + active retention policy; `DELETE /api/reports/{filename}` removes one file (basename must end in `.md` or `.pdf`). `GET /ready` verifies the reports directory is writable (load balancers / Spaces health checks).
 
 If both keys are unset, the app silently falls back to `SmartMockLLMClient` — every endpoint stays functional with deterministic, intent-aware mock responses.
 

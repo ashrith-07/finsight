@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from dataclasses import dataclass
 from threading import Lock
@@ -11,6 +10,7 @@ from typing import Any
 
 from src.logging_config import get_logger
 from src.models import ClassifierResult
+from src.runtime_paths import default_agno_memory_db_path
 
 logger = get_logger("session")
 
@@ -94,19 +94,16 @@ class QueryCache:
 class AgnoMemoryManager:
     """Long-term, cross-session user facts via Agno's ``MemoryManager``.
 
-    Default backend is **SQLite** (``.agno_memory.db``) when the optional
-    ``sqlalchemy`` dependency is available; otherwise we fall back to Agno's
-    file-backed JSON store, and finally to an in-process store so the demo
-    keeps working without any external dependency.
+    Default backend is **SQLite** under ``DATA_DIR`` (or project root) when the
+    optional ``sqlalchemy`` dependency is available; otherwise we fall back to
+    Agno's file-backed JSON store, and finally to an in-process store.
     """
-
-    DEFAULT_DB_PATH = os.environ.get("FINSIGHT_MEMORY_DB", ".agno_memory.db")
 
     def __init__(self, db_path: str | None = None) -> None:
         self._enabled = False
         self._backend = "disabled"
         self._memory: Any = None
-        self._db_path = db_path or self.DEFAULT_DB_PATH
+        self._db_path = db_path or default_agno_memory_db_path()
 
         try:
             from agno.memory import MemoryManager  # noqa: WPS433 — lazy on purpose

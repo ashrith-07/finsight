@@ -6,10 +6,14 @@ import asyncio
 import json
 import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from dotenv import load_dotenv
+
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,10 +36,10 @@ from src.mcp import calculator_mcp, portfolio_analytics_mcp, yfinance_mcp
 from src.models import AgentResponse, ChatRequest, PortfolioHealthResult
 from src.orchestrator import FinsightOrchestrator  # noqa: F401  (re-exported for callers)
 from src.router import AgentRouter
+from src.runtime_paths import reports_dir
 from src.safety import check as safety_check
 from src.session import ConversationTurn, agno_memory, query_cache, session_store
 
-load_dotenv()
 setup_logging()
 
 
@@ -118,6 +122,21 @@ metrics = _Metrics()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()  # idempotent — ensures handlers are reset if uvicorn rewired them.
+    from src.reports_service import cleanup_reports
+
+    root = reports_dir()
+    await asyncio.to_thread(cleanup_reports, root)
+
+    async def _report_retention_loop() -> None:
+        try:
+            interval = float(os.environ.get("REPORT_CLEANUP_INTERVAL_SEC", "3600"))
+        except ValueError:
+            interval = 3600.0
+        while True:
+            await asyncio.sleep(max(60.0, interval))
+            await asyncio.to_thread(cleanup_reports, reports_dir())
+
+    task = asyncio.create_task(_report_retention_loop())
     logger.info(
         "service_startup",
         extra={
@@ -127,13 +146,20 @@ async def lifespan(app: FastAPI):
             "mcp_servers": 5,
             "orchestrator": "FinsightOrchestrator",
             "pipeline_timeout_s": PIPELINE_TIMEOUT,
+            "reports_dir": str(root),
+            "agno_memory_backend": agno_memory.backend,
         },
     )
-    yield
-    logger.info(
-        "service_shutdown",
-        extra={"event": "lifecycle", "phase": "shutdown"},
-    )
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        logger.info(
+            "service_shutdown",
+            extra={"event": "lifecycle", "phase": "shutdown"},
+        )
 
 
 app = FastAPI(
@@ -143,14 +169,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+_cors = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 # Resolve frontend dir relative to this file so it works regardless of CWD.
 _FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
 if os.path.isdir(_FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=_FRONTEND_DIR), name="static")
 
-# Generated reports — served raw so the UI can offer a one-click view/download.
-_REPORTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reports")
-os.makedirs(_REPORTS_DIR, exist_ok=True)
+# Generated reports — same directory as ``ReportMCPServer`` (``DATA_DIR`` / ``REPORTS_DIR``).
+_REPORTS_DIR = str(reports_dir())
 app.mount("/reports", StaticFiles(directory=_REPORTS_DIR), name="reports")
 
 
@@ -629,6 +664,37 @@ async def serve_frontend():
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "finsight-ai"}
+
+
+@app.get("/ready")
+async def readiness() -> dict[str, bool]:
+    """Lightweight readiness: reports directory must be writable at runtime."""
+    root = reports_dir()
+    probe = root / ".finsight_write_probe"
+    try:
+        probe.write_text("", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return {"ready": True, "reports_writable": True}
+    except OSError:
+        return {"ready": False, "reports_writable": False}
+
+
+@app.get("/api/reports")
+async def list_report_artefacts() -> dict:
+    from src.reports_service import list_reports, retention_policy
+
+    root = reports_dir()
+    return {"reports": list_reports(root), "policy": retention_policy()}
+
+
+@app.delete("/api/reports/{filename}")
+async def delete_report_artefact(filename: str) -> dict[str, str]:
+    from src.reports_service import delete_report
+
+    root = reports_dir()
+    if not delete_report(root, filename):
+        raise HTTPException(status_code=404, detail="Report not found or invalid name")
+    return {"deleted": filename}
 
 
 @app.get("/users")
