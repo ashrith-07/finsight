@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from agno.tools import Toolkit
 from fpdf import FPDF
@@ -114,7 +115,7 @@ class ReportMCPServer(Toolkit):
     def generate_portfolio_report(
         self,
         user_name: str,
-        portfolio_data: dict,
+        portfolio_data: dict[str, Any],
         format: str = "markdown",
         output_format: str | None = None,
         report_type: str | None = None,
@@ -175,8 +176,8 @@ class ReportMCPServer(Toolkit):
     def generate_market_report(
         self,
         tickers: list[str],
-        snapshots: list[dict],
-        news: list[dict],
+        snapshots: list[dict[str, Any]],
+        news: list[dict[str, Any]],
         format: str = "markdown",
         output_format: str | None = None,
         report_type: str | None = None,
@@ -227,7 +228,7 @@ class ReportMCPServer(Toolkit):
     # ---------- Risk ----------
     def generate_risk_report(
         self,
-        risk_data: dict,
+        risk_data: dict[str, Any],
         format: str = "markdown",
         output_format: str | None = None,
         report_type: str | None = None,

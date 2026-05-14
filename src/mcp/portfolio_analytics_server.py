@@ -7,6 +7,7 @@ keep the rest of the analytics pipeline alive.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import numpy as np
 import yfinance as yf
@@ -148,7 +149,7 @@ class PortfolioAnalyticsMCPServer(Toolkit):
 
     def portfolio_beta(
         self,
-        positions: list[dict],
+        positions: list[dict[str, Any]],
         benchmark: str = "SPY",
     ) -> dict:
         """Weighted portfolio beta with per-position breakdown."""
@@ -250,7 +251,7 @@ class PortfolioAnalyticsMCPServer(Toolkit):
             logger.warning("portfolio_analytics_mcp.sector_exposure failed: %s", e)
             return {"error": str(e)}
 
-    def dividend_analysis(self, positions: list[dict]) -> dict:
+    def dividend_analysis(self, positions: list[dict[str, Any]]) -> dict:
         """Annual dividend income, projected monthly income, top payers.
 
         ``dividendRate`` (annual $/share) anchors the calc when present —
@@ -381,13 +382,18 @@ class PortfolioAnalyticsMCPServer(Toolkit):
 
     def performance_attribution(
         self,
-        positions: list[dict],
-        prices: dict,
+        positions: list[dict[str, Any]],
+        prices: dict[str, float],
     ) -> dict:
         """Per-position contribution to portfolio return, ranked best→worst.
 
-        Each position must carry ``avg_cost`` and either an entry in ``prices``
-        (mapping ticker → current price) or a ``current_price`` field.
+        Each position must carry ``ticker`` and ``avg_cost``, plus ``quantity``
+        when inferring weights from holdings. Supply either ``current_price`` on
+        the row or a ``prices`` map of ticker (upper-case string) → last price.
+
+        Type hints use ``dict[str, Any]`` / ``dict[str, float]`` so provider tool
+        JSON schemas allow dynamic keys (plain ``dict`` / ``list[dict]`` often
+        compile to ``additionalProperties: false`` and reject valid calls).
         """
         try:
             rows = [p for p in (positions or []) if isinstance(p, dict) and p.get("ticker")]
