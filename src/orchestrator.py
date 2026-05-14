@@ -686,4 +686,336 @@ def _pop_timings(eco: dict[str, Any]) -> tuple[dict[str, int], float]:
     return timings, wall
 
 
-__all__ = ["ValuraOrchestrator"]
+class ValuraAgnoTeam:
+    """Native Agno ``Team`` coordinator with deterministic ``ValuraOrchestrator`` fallback.
+
+    Two teams are created up-front:
+      * ``portfolio_team`` runs in ``coordinate`` mode (this Agno build's analogue of
+        the requested ``collaborate`` mode) for portfolio / risk-assessment queries.
+      * ``research_team`` runs in ``route`` mode for market / news / report queries —
+        the team leader picks the single best specialist.
+
+    When no ``OPENAI_API_KEY`` / ``GROQ_API_KEY`` is configured, every call short-circuits
+    to ``ValuraOrchestrator`` so existing tests and the no-key demo path still work.
+    """
+
+    PORTFOLIO_AGENTS = ("portfolio_health", "risk_assessment")
+    RESEARCH_AGENTS = ("market_research", "predictive_analysis")
+
+    def __init__(self, llm: LLMClient | None = None) -> None:
+        from src.llm import get_llm_client
+        from src.llm.agno_model import get_agno_model, get_agno_model_strong
+
+        self._llm = llm or get_llm_client()
+        self._fallback = ValuraOrchestrator(self._llm)
+        self._stub = StubAgent()
+
+        model = get_agno_model()
+        strong = get_agno_model_strong() or model
+        self._available = model is not None
+        self._portfolio_team: Team | None = None
+        self._research_team: Team | None = None
+        self._news_agent: Agent | None = None
+        self._report_agent: Agent | None = None
+
+        if not self._available:
+            return
+
+        try:
+            from src.mcp import (
+                calculator_mcp,
+                portfolio_analytics_mcp,
+                report_mcp,
+                web_search_mcp,
+                yfinance_mcp,
+            )
+
+            portfolio_agent = Agent(
+                name="Portfolio Health Analyst",
+                role="Analyses portfolio holdings, concentration risk, and performance",
+                model=model,
+                tools=[yfinance_mcp, portfolio_analytics_mcp, calculator_mcp],
+                instructions=[
+                    "Analyse portfolio health comprehensively.",
+                    "Always fetch live prices for all positions.",
+                    "Compute concentration, performance, and benchmark comparison.",
+                    "Provide plain-language observations.",
+                ],
+            )
+            risk_agent = Agent(
+                name="Risk Analyst",
+                role="Computes portfolio risk metrics including VaR and stress tests",
+                model=model,
+                tools=[yfinance_mcp, portfolio_analytics_mcp],
+                instructions=[
+                    "Compute Value at Risk at 95% and 99% confidence.",
+                    "Run all five stress test scenarios.",
+                    "Identify dangerous position correlations above 0.7.",
+                    "Calculate Sharpe ratio and explain it plainly.",
+                ],
+            )
+            market_agent = Agent(
+                name="Market Research Analyst",
+                role="Researches individual stocks and market conditions",
+                model=model,
+                tools=[yfinance_mcp, web_search_mcp],
+                instructions=[
+                    "Fetch comprehensive price and fundamental data.",
+                    "Search for recent relevant news.",
+                    "Compare multiple tickers when provided.",
+                    "Highlight the most important metric for investors.",
+                ],
+            )
+            news_agent = Agent(
+                name="Financial News Analyst",
+                role="Aggregates and analyses financial news with sentiment scoring",
+                model=model,
+                tools=[web_search_mcp],
+                instructions=[
+                    "Search for news about all mentioned tickers.",
+                    "Score sentiment for each article.",
+                    "Identify the most market-moving headlines.",
+                    "Summarise in three sentences what matters most.",
+                ],
+            )
+            report_agent = Agent(
+                name="Report Generator",
+                role="Creates formatted financial reports in PDF or Markdown",
+                model=model,
+                tools=[report_mcp, yfinance_mcp],
+                instructions=[
+                    "Generate comprehensive, well-structured reports.",
+                    "Always include an executive summary.",
+                    "Include data tables for all quantitative information.",
+                    "End every report with the regulatory disclaimer.",
+                ],
+            )
+
+            # ``coordinate`` is this Agno build's collaborate-style mode:
+            # the leader fans the task out and synthesises member outputs.
+            self._portfolio_team = Team(
+                name="Portfolio Analysis Team",
+                mode="coordinate",
+                model=strong,
+                members=[portfolio_agent, risk_agent, news_agent],
+                instructions=[
+                    "You coordinate a team of financial specialists for Valura AI.",
+                    "For portfolio queries every specialist analyses in parallel.",
+                    "Synthesise their outputs into one unified response.",
+                    "The portfolio analyst handles holdings and performance.",
+                    "The risk analyst handles VaR, stress tests, and correlations.",
+                    "The news analyst handles recent market news and sentiment.",
+                    "Combine insights into a clear, actionable response.",
+                    "Always include the regulatory disclaimer.",
+                ],
+                markdown=True,
+                debug_mode=True,
+            )
+            self._research_team = Team(
+                name="Market Research Team",
+                mode="route",
+                model=strong,
+                members=[market_agent, news_agent, report_agent],
+                instructions=[
+                    "Route financial research queries to the right specialist.",
+                    "Market data and stock analysis -> Market Research Analyst.",
+                    "News and sentiment queries -> Financial News Analyst.",
+                    "Report generation requests -> Report Generator.",
+                    "For compare queries route to Market Research Analyst.",
+                ],
+                debug_mode=True,
+            )
+            self._news_agent = news_agent
+            self._report_agent = report_agent
+        except Exception as e:
+            logger.warning("ValuraAgnoTeam construction failed: %s", e)
+            self._available = False
+
+    async def run(
+        self,
+        classifier_result: ClassifierResult,
+        user: dict,
+        query: str = "",
+    ) -> AgentResponse:
+        if not self._available:
+            return await self._fallback.run(classifier_result, user, query=query)
+
+        agent = (classifier_result.agent or "general_query").strip()
+        intent = classifier_result.intent or ""
+        entities = classifier_result.entities
+
+        try:
+            if agent in self.PORTFOLIO_AGENTS:
+                return await self._run_portfolio_team(agent, user, intent, entities)
+            if agent in self.RESEARCH_AGENTS:
+                return await self._run_research_team(agent, intent, entities, user)
+            if agent == "financial_news":
+                return await self._run_news_direct(intent, entities, user)
+            if agent == "report_generator":
+                return await self._run_report_direct(intent, entities, user)
+            return await self._fallback.run(classifier_result, user, query=query)
+        except Exception as e:
+            logger.error("AgnoTeam error: %s", e)
+            return await self._fallback.run(classifier_result, user, query=query)
+
+    async def _run_portfolio_team(
+        self, agent: str, user: dict, intent: str, entities: Entity,
+    ) -> AgentResponse:
+        assert self._portfolio_team is not None
+        prompt = self._build_portfolio_prompt(user, intent)
+        start = time.perf_counter()
+        response = await self._portfolio_team.arun(prompt, stream=False)
+        wall_ms = int((time.perf_counter() - start) * 1000)
+        content = self._extract_content(response)
+        meta = ExecutionMetadata(
+            agents_ran=["portfolio_health", "risk_analysis", "news_agent"],
+            timings={"portfolio_team": wall_ms},
+            parallel=True,
+            wall_time_ms=wall_ms,
+            sequential_time_ms=wall_ms,
+            time_saved_ms=0,
+        )
+        return AgentResponse(
+            agent=agent,
+            implemented=True,
+            intent=intent,
+            entities=entities,
+            result={
+                "content": content,
+                "team": "portfolio_analysis_team",
+                "mode": "coordinate",
+                "members": ["portfolio_analyst", "risk_analyst", "news_analyst"],
+            },
+            message=self._snippet(content),
+            execution_metadata=meta,
+        )
+
+    async def _run_research_team(
+        self, agent: str, intent: str, entities: Entity, user: dict,
+    ) -> AgentResponse:
+        assert self._research_team is not None
+        tickers = list(entities.tickers or [])
+        prompt = (
+            f"{intent}. Tickers: {', '.join(tickers) if tickers else 'none specified'}. "
+            f"User: {user.get('name') or 'investor'} (risk {user.get('risk_profile') or 'unknown'})."
+        )
+        start = time.perf_counter()
+        response = await self._research_team.arun(prompt, stream=False)
+        wall_ms = int((time.perf_counter() - start) * 1000)
+        content = self._extract_content(response)
+        meta = ExecutionMetadata(
+            agents_ran=["market_research"],
+            timings={"research_team": wall_ms},
+            parallel=False,
+            wall_time_ms=wall_ms,
+            sequential_time_ms=wall_ms,
+            time_saved_ms=0,
+        )
+        return AgentResponse(
+            agent="market_research" if agent != "report_generator" else agent,
+            implemented=True,
+            intent=intent,
+            entities=entities,
+            result={
+                "content": content,
+                "team": "market_research_team",
+                "mode": "route",
+            },
+            message=self._snippet(content),
+            execution_metadata=meta,
+        )
+
+    async def _run_news_direct(
+        self, intent: str, entities: Entity, user: dict,
+    ) -> AgentResponse:
+        assert self._news_agent is not None
+        tickers = list(entities.tickers or [])
+        prompt = (
+            f"News digest for: {intent}. Tickers: "
+            f"{', '.join(tickers) if tickers else 'broad market'}."
+        )
+        start = time.perf_counter()
+        response = await self._news_agent.arun(prompt, stream=False)
+        wall_ms = int((time.perf_counter() - start) * 1000)
+        content = self._extract_content(response)
+        meta = ExecutionMetadata(
+            agents_ran=["news_agent"],
+            timings={"news_agent": wall_ms},
+            parallel=False,
+            wall_time_ms=wall_ms,
+            sequential_time_ms=wall_ms,
+            time_saved_ms=0,
+        )
+        return AgentResponse(
+            agent="financial_news",
+            implemented=True,
+            intent=intent,
+            entities=entities,
+            result={"content": content},
+            message=self._snippet(content),
+            execution_metadata=meta,
+        )
+
+    async def _run_report_direct(
+        self, intent: str, entities: Entity, user: dict,
+    ) -> AgentResponse:
+        assert self._report_agent is not None
+        tickers = list(entities.tickers or [])
+        prompt = (
+            f"Generate a financial report. Intent: {intent}. Tickers: "
+            f"{', '.join(tickers) if tickers else 'portfolio'}. "
+            f"User positions: {user.get('positions') or []}."
+        )
+        start = time.perf_counter()
+        response = await self._report_agent.arun(prompt, stream=False)
+        wall_ms = int((time.perf_counter() - start) * 1000)
+        content = self._extract_content(response)
+        meta = ExecutionMetadata(
+            agents_ran=["report_generator"],
+            timings={"report_generator": wall_ms},
+            parallel=False,
+            wall_time_ms=wall_ms,
+            sequential_time_ms=wall_ms,
+            time_saved_ms=0,
+        )
+        return AgentResponse(
+            agent="report_generator",
+            implemented=True,
+            intent=intent,
+            entities=entities,
+            result={"content": content},
+            message=self._snippet(content),
+            execution_metadata=meta,
+        )
+
+    def _build_portfolio_prompt(self, user: dict, intent: str) -> str:
+        positions = user.get("positions") or []
+        if positions:
+            pos_text = "\n".join(
+                f"- {p.get('ticker')}: {p.get('quantity')} shares, "
+                f"avg cost ${p.get('avg_cost')}, bought {p.get('purchased_at')}"
+                for p in positions
+            )
+        else:
+            pos_text = "No positions (new investor)"
+        bench = (user.get("preferences") or {}).get("preferred_benchmark") or "S&P 500"
+        return (
+            f"User: {user.get('name') or 'Unknown'} | Age: {user.get('age')} | "
+            f"Risk Profile: {user.get('risk_profile')} | Currency: {user.get('base_currency') or 'USD'}\n\n"
+            f"Portfolio Positions:\n{pos_text}\n\n"
+            f"Benchmark: {bench}\n\n"
+            f"Query: {intent}\n\n"
+            "Please provide a comprehensive analysis covering portfolio health, "
+            "risk metrics, and relevant market news."
+        )
+
+    @staticmethod
+    def _extract_content(response: Any) -> Any:
+        return getattr(response, "content", response)
+
+    @staticmethod
+    def _snippet(content: Any) -> str:
+        return str(content or "")[:200] if content is not None else "Team response completed."
+
+
+__all__ = ["ValuraOrchestrator", "ValuraAgnoTeam"]

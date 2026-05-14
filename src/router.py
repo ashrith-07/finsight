@@ -7,7 +7,7 @@ import logging
 from src.agents.stub import StubAgent
 from src.llm.base import LLMClient
 from src.models import AgentResponse, ClassifierResult
-from src.orchestrator import ValuraOrchestrator
+from src.orchestrator import ValuraAgnoTeam, ValuraOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +28,12 @@ REPORT_INTENTS = frozenset({"financial_planning"})
 
 
 class AgentRouter:
+    """Primary path: ``ValuraAgnoTeam``. Falls back to ``ValuraOrchestrator`` automatically when no LLM key is configured."""
+
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
         self._orchestrator = ValuraOrchestrator(llm)
+        self._team = ValuraAgnoTeam(llm)
         self._stub = StubAgent()
 
     async def route(
@@ -45,15 +48,15 @@ class AgentRouter:
 
         try:
             if agent in ORCHESTRATED:
-                return await self._orchestrator.run(classifier_result, user, query=query)
+                return await self._team.run(classifier_result, user, query=query)
 
             if agent in NEWS_INTENTS:
                 remapped = classifier_result.model_copy(update={"agent": "financial_news"})
-                return await self._orchestrator.run(remapped, user, query=query)
+                return await self._team.run(remapped, user, query=query)
 
             if agent in REPORT_INTENTS:
                 remapped = classifier_result.model_copy(update={"agent": "report_generator"})
-                return await self._orchestrator.run(remapped, user, query=query)
+                return await self._team.run(remapped, user, query=query)
 
             return await self._stub.run(agent, intent, entities)
         except Exception:
