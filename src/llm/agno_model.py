@@ -38,7 +38,14 @@ def get_agno_model() -> Optional[Any]:
 
 
 def get_agno_model_strong() -> Optional[Any]:
-    """Stronger model for ``Team`` coordination; ``None`` when no provider key is configured."""
+    """Model for ``Team`` coordination; ``None`` when no provider key is configured.
+
+    On Groq we default the team lead to the **same** model as member agents
+    (``GROQ_MODEL`` / ``llama-3.1-8b-instant``). A separate 70B coordinator plus
+    three 8B tool-callers routinely exceeds free-tier TPM and triggers 429s.
+    Set ``GROQ_TEAM_MODEL`` to override the coordinator only (e.g.
+    ``llama-3.3-70b-versatile``) when your quota allows.
+    """
     if os.environ.get("OPENAI_API_KEY", "").strip():
         from agno.models.openai import OpenAIChat
 
@@ -46,7 +53,10 @@ def get_agno_model_strong() -> Optional[Any]:
     if os.environ.get("GROQ_API_KEY", "").strip():
         from agno.models.groq import Groq
 
-        return Groq(id="llama-3.3-70b-versatile")
+        override = os.environ.get("GROQ_TEAM_MODEL", "").strip()
+        if override and not override.lower().startswith("gpt"):
+            return Groq(id=override)
+        return Groq(id=_groq_id_default())
     return None
 
 

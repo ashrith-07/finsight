@@ -773,6 +773,12 @@ class FinsightAgnoTeam:
                 tools=[web_search_mcp],
                 instructions=[
                     "Search for news about all mentioned tickers.",
+                    "For web_search tools always pass valid JSON arguments: every string "
+                    "parameter must be a non-empty string (never null). Use concrete "
+                    "ticker symbols from the portfolio for company/news queries, not the "
+                    "client's personal name as a company name.",
+                    "Use search_financial_news with short queries; keep max_results at 5 "
+                    "unless the user explicitly asks for more, and never above 10.",
                     "Score sentiment for each article.",
                     "Identify the most market-moving headlines.",
                     "Summarise in three sentences what matters most.",
@@ -883,6 +889,11 @@ class FinsightAgnoTeam:
         "im sorry",
         "an error occurred",
         "rate limit",
+        "rate_limit",
+        "too many requests",
+        "tokens per minute",
+        "tpm",
+        "429",
         "request failed",
         "unauthorized",
         "invalid api key",
@@ -895,6 +906,19 @@ class FinsightAgnoTeam:
         "request canceled",
         "run cancelled",
         "run canceled",
+    )
+    # Long responses that are actually provider errors (Groq 429 JSON, etc.).
+    _ERROR_CONTENT_MARKERS_LONG = (
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "tokens per minute",
+        "429",
+        "rate_limit_exceeded",
+        "function arguments are not a valid json",
+        "not a valid json object",
+        "invalid_request_error",
+        "context length exceeded",
     )
 
     @classmethod
@@ -910,9 +934,11 @@ class FinsightAgnoTeam:
         text = content.strip()
         if not text:
             return True
-        if len(text) <= 160:
-            lc = text.lower()
-            if any(marker in lc for marker in cls._ERROR_CONTENT_MARKERS):
+        head = text[:8000].lower()
+        if any(marker in head for marker in cls._ERROR_CONTENT_MARKERS_LONG):
+            return True
+        if len(text) <= 280:
+            if any(marker in head for marker in cls._ERROR_CONTENT_MARKERS):
                 return True
         return False
 

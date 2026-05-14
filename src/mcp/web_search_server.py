@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from agno.tools import Toolkit
-from duckduckgo_search import DDGS
 
 from src.logging_config import get_logger
+
+try:
+    from ddgs import DDGS  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover
+    from duckduckgo_search import DDGS  # type: ignore[no-redef]
 
 logger = get_logger("mcp.web_search")
 
@@ -29,7 +33,7 @@ def _normalise_text(item: dict) -> dict:
 
 
 # DDG returns 202/rate-limit errors as plain exceptions; we swallow them and return [].
-_DDG_TIMELIMIT_DAYS = {1: "d", 7: "w", 30: "m", 90: "m", 365: "y"}
+_MAX_NEWS_RESULTS = 12
 
 
 def _timelimit_for_days(days_back: int) -> str:
@@ -55,12 +59,15 @@ class WebSearchMCPServer(Toolkit):
         self.register(self.search_market_analysis)
         self.register(self.get_economic_events)
 
-    def search_financial_news(self, query: str, max_results: int = 5) -> list[dict]:
+    def search_financial_news(self, query: str | None = None, max_results: int = 5) -> list[dict]:
         """News search; appends 'financial news' so DDG biases towards markets coverage."""
-        q = f"{query} financial news".strip()
+        if not query or not isinstance(query, str) or not query.strip():
+            return []
+        n = max(1, min(int(max_results or 5), _MAX_NEWS_RESULTS))
+        q = f"{query.strip()} financial news".strip()
         try:
             with DDGS() as ddg:
-                raw = ddg.news(q, max_results=max_results) or []
+                raw = ddg.news(q, max_results=n) or []
             return [_normalise_news(r) for r in raw]
         except Exception as e:
             logger.warning("web_search_mcp.search_financial_news(%r) failed: %s", q, e)
@@ -68,12 +75,16 @@ class WebSearchMCPServer(Toolkit):
 
     def search_company_news(
         self,
-        company_name: str,
-        ticker: str,
+        company_name: str | None = None,
+        ticker: str | None = None,
         days_back: int = 7,
     ) -> list[dict]:
         """Recent news for a single company, time-limited via DDG's ``timelimit`` parameter."""
-        q = f"{company_name} {ticker} stock news".strip()
+        cn = (company_name or "").strip() if isinstance(company_name, str) else ""
+        tk = (ticker or "").strip() if isinstance(ticker, str) else ""
+        if not cn and not tk:
+            return []
+        q = f"{cn} {tk} stock news".strip()
         try:
             with DDGS() as ddg:
                 raw = ddg.news(
@@ -86,9 +97,11 @@ class WebSearchMCPServer(Toolkit):
             logger.warning("web_search_mcp.search_company_news(%r) failed: %s", q, e)
             return []
 
-    def search_market_analysis(self, topic: str) -> list[dict]:
+    def search_market_analysis(self, topic: str | None = None) -> list[dict]:
         """Free-text web search for analyst commentary / forecasts."""
-        q = f"{topic} market analysis forecast 2025".strip()
+        if not topic or not isinstance(topic, str) or not topic.strip():
+            return []
+        q = f"{topic.strip()} market analysis forecast 2025".strip()
         try:
             with DDGS() as ddg:
                 raw = ddg.text(q, max_results=5) or []

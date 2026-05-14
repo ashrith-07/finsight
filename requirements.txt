@@ -32,7 +32,8 @@ scikit-learn>=1.4.0
 # --- Multi-agent ecosystem + MCP servers ---
 agno>=1.0.0
 agnos
-duckduckgo-search>=6.0.0
+ddgs>=9.0.0                # DuckDuckGo search (preferred; avoids duckduckgo_search rename warning)
+duckduckgo-search>=6.0.0   # fallback if ddgs is unavailable
 fpdf2>=2.7.0
 
 # --- Frontend serving ---
