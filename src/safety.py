@@ -33,6 +33,17 @@ _EDUCATION_RX = re.compile(
     re.IGNORECASE,
 )
 
+# Short-circuit ML when the user clearly wants a portfolio artefact (Agno tool
+# calls can otherwise push TF-IDF mass toward fraud-ish training ngrams).
+_BENIGN_PORTFOLIO_REPORT_RX = re.compile(
+    r"(?is)"
+    r"\b(portfolio|holdings|positions)\b.*\b("
+    r"generate\s+(?:a\s+)?(?:pdf\s+|markdown\s+)?report|"
+    r"report\s+(?:of|for|on)\s+(?:it|my|the)\b"
+    r")\b|"
+    r"\b(generate\s+(?:a\s+)?(?:pdf\s+|markdown\s+)?report\b).*\b(portfolio|holdings|positions)\b",
+)
+
 
 # High-precision regex prefilter. Catches obvious illicit phrasings the ML
 # model can miss when intent words are far apart. ML still handles the long
@@ -412,6 +423,9 @@ class SafetyGuard:
             ("explain index funds versus factor tilts plain english", "safe"),
             ("what are adr gdr differences investing internationally", "safe"),
             # benign routing demos (portfolio / chat style — must stay safe)
+            ("hows my portfolio doing generate a report of it", "safe"),
+            ("how is my portfolio doing please generate a pdf report", "safe"),
+            ("generate a markdown report for my current holdings", "safe"),
             ("how is my portfolio doing today overview please", "safe"),
             ("show diversification breakdown for my holdings summary", "safe"),
             ("am i beating the s and p five hundred benchmark year to date", "safe"),
@@ -474,6 +488,9 @@ class SafetyGuard:
                         category=category,
                         message=self.BLOCK_MESSAGES[category],
                     )
+
+        if _BENIGN_PORTFOLIO_REPORT_RX.search(text):
+            return SafetyVerdict(blocked=False, category="clean", message="")
 
         clf = self._pipeline.named_steps["clf"]
         proba = self._pipeline.predict_proba([text])[0]

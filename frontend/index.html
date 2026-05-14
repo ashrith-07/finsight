@@ -1178,6 +1178,7 @@
       else pushLog('Dispatching…', false);
       const reqStart = performance.now();
       let sawResult = false;
+      let streamError = false;
 
       try {
         const res = await fetch('/chat', {
@@ -1212,6 +1213,7 @@
             handleResult(jsonStr, aiBubble, badgeEl, reqStart, expected);
           },
           onError: (jsonStr) => {
+            streamError = true;
             const parsed = safeJson(jsonStr);
             const m = (parsed && parsed.message) || jsonStr || 'unknown error';
             appendErrorMessage(m);
@@ -1220,7 +1222,7 @@
           },
           onDone: () => {
             dotEl.remove();
-            if (!sawResult) {
+            if (!sawResult && !streamError) {
               // Safety-block path: only delta + done, no result event.
               badgeEl.textContent = 'safety';
               badgeEl.style.color = 'var(--red)';

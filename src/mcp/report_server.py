@@ -52,6 +52,16 @@ def _ascii(text: str) -> str:
     return str(text or "").encode("latin-1", "ignore").decode("latin-1")
 
 
+def _resolved_report_format(fmt: str, output_format: str | None) -> str:
+    """LLM tool layers often emit ``output_format=``; Agno validates kwargs strictly."""
+    raw = (output_format or fmt or "markdown").strip().lower()
+    if raw in ("pdf",):
+        return "pdf"
+    if raw in ("markdown", "md", "text", "txt"):
+        return "markdown"
+    return "markdown"
+
+
 class _PDF(FPDF):
     def header(self):
         self.set_font("Helvetica", "B", 14)
@@ -106,7 +116,10 @@ class ReportMCPServer(Toolkit):
         user_name: str,
         portfolio_data: dict,
         format: str = "markdown",
+        output_format: str | None = None,
+        report_type: str | None = None,
     ) -> dict:
+        _ = report_type
         data = portfolio_data or {}
         currency = data.get("base_currency") or data.get("currency") or "USD"
         positions = data.get("positions") or []
@@ -155,7 +168,8 @@ class ReportMCPServer(Toolkit):
             ("Disclaimer", DISCLAIMER),
         ]
 
-        return self._emit(title, sections, format=format, prefix=f"portfolio_{_slug(user_name)}")
+        fmt = _resolved_report_format(format, output_format)
+        return self._emit(title, sections, format=fmt, prefix=f"portfolio_{_slug(user_name)}")
 
     # ---------- Market ----------
     def generate_market_report(
@@ -164,7 +178,10 @@ class ReportMCPServer(Toolkit):
         snapshots: list[dict],
         news: list[dict],
         format: str = "markdown",
+        output_format: str | None = None,
+        report_type: str | None = None,
     ) -> dict:
+        _ = report_type
         title = f"Market Research Report — {', '.join(tickers) if tickers else 'overview'}"
 
         snap_lines = [
@@ -204,10 +221,18 @@ class ReportMCPServer(Toolkit):
         ]
 
         prefix = f"market_{_slug('_'.join(tickers))}" if tickers else "market_overview"
-        return self._emit(title, sections, format=format, prefix=prefix)
+        fmt = _resolved_report_format(format, output_format)
+        return self._emit(title, sections, format=fmt, prefix=prefix)
 
     # ---------- Risk ----------
-    def generate_risk_report(self, risk_data: dict, format: str = "markdown") -> dict:
+    def generate_risk_report(
+        self,
+        risk_data: dict,
+        format: str = "markdown",
+        output_format: str | None = None,
+        report_type: str | None = None,
+    ) -> dict:
+        _ = report_type
         data = risk_data or {}
         title = "Risk Analysis Report"
 
@@ -241,7 +266,8 @@ class ReportMCPServer(Toolkit):
             ("Disclaimer", DISCLAIMER),
         ]
 
-        return self._emit(title, sections, format=format, prefix="risk")
+        fmt = _resolved_report_format(format, output_format)
+        return self._emit(title, sections, format=fmt, prefix="risk")
 
     # ---------- internals ----------
     def _emit(
