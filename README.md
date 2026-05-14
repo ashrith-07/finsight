@@ -1,3 +1,13 @@
+---
+title: FinSight
+emoji: 📈
+colorFrom: green
+colorTo: teal
+sdk: docker
+app_port: 7860
+pinned: true
+---
+
 # Finsight AI — Multi-Agent Financial Intelligence Ecosystem
 
 A production-grade FastAPI service that turns one user query into a parallel multi-agent run across portfolio analytics, market research, risk modelling, news sentiment and report generation — streamed back as SSE with per-agent timing telemetry.
