@@ -989,6 +989,8 @@ class ValuraAgnoTeam:
         )
 
     def _build_portfolio_prompt(self, user: dict, intent: str) -> str:
+        from src.session import agno_memory
+
         positions = user.get("positions") or []
         if positions:
             pos_text = "\n".join(
@@ -999,7 +1001,9 @@ class ValuraAgnoTeam:
         else:
             pos_text = "No positions (new investor)"
         bench = (user.get("preferences") or {}).get("preferred_benchmark") or "S&P 500"
+        memory_text = agno_memory.format_for_prompt(user.get("_memories") or [])
         return (
+            f"{memory_text}"
             f"User: {user.get('name') or 'Unknown'} | Age: {user.get('age')} | "
             f"Risk Profile: {user.get('risk_profile')} | Currency: {user.get('base_currency') or 'USD'}\n\n"
             f"Portfolio Positions:\n{pos_text}\n\n"

@@ -28,7 +28,7 @@ from src.models import AgentResponse, ChatRequest, PortfolioHealthResult
 from src.orchestrator import ValuraOrchestrator  # noqa: F401  (re-exported for callers)
 from src.router import AgentRouter
 from src.safety import check as safety_check
-from src.session import ConversationTurn, query_cache, session_store
+from src.session import ConversationTurn, agno_memory, query_cache, session_store
 
 load_dotenv()
 
@@ -275,11 +275,26 @@ async def chat(request: ChatRequest) -> EventSourceResponse:
                     )
                 t_classify = time.monotonic() - t_classify_start
 
+                # Inject long-term Agno memories into the user dict so the
+                # orchestrator/team can surface them in the system prompt.
+                user_id = str(request.user.get("user_id") or request.session_id)
+                user_memories = await agno_memory.get_user_memories(user_id)
+                user_with_memory = {**request.user, "_memories": user_memories}
+
                 t_agent_start = time.monotonic()
                 agent_response = await router.route(
-                    classifier_result, request.user, query=request.query
+                    classifier_result, user_with_memory, query=request.query
                 )
                 t_agent = time.monotonic() - t_agent_start
+
+                # Persist this turn as a long-term memory record (best-effort).
+                asyncio.create_task(
+                    agno_memory.add_user_memory(
+                        user_id=user_id,
+                        conversation=request.query,
+                        response=agent_response.message,
+                    )
+                )
 
                 summary = _build_summary(agent_response)
                 for word in summary.split():
@@ -406,6 +421,12 @@ async def list_agents() -> dict:
     return {
         "total_agents": 5,
         "orchestrator": "ValuraOrchestrator",
+        "memory": {
+            "type": f"Agno Memory ({agno_memory.backend})",
+            "enabled": agno_memory.enabled,
+            "scope": "cross-session user facts",
+            "complement": "in-session turn history via SessionStore",
+        },
         "mcp_servers": [
             {
                 "name": "yfinance_mcp",

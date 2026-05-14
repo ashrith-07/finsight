@@ -40,3 +40,8 @@ tmp/
 # Generated MCP report artefacts (regenerated per request)
 reports/*
 !reports/.gitkeep
+
+# Agno long-term memory store (per-environment, never committed)
+.agno_memory.db
+.agno_memory.json
+.agno_memory.json/
