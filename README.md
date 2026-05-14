@@ -374,5 +374,3 @@ LLM providers go down. Networks rate-limit. Free tiers throttle. A demo that dep
 | `tests/` | pytest suite (passes without any API key) |
 | `reports/` | Generated portfolio / market / risk reports (gitignored runtime output) |
 | `.agno_memory.json/` | Persistent long-term memory (gitignored) |
-
-Assignment brief and rubric context remain in [`ASSIGNMENT.md`](ASSIGNMENT.md).

@@ -14,10 +14,11 @@ htmlcov/
 .coverage
 *.cover
 
-# Environment
+# Environment (never commit secrets)
 .env
 .env.*
 !.env.example
+.envrc
 
 # Distribution
 dist/
@@ -41,8 +42,7 @@ tmp/
 reports/*
 !reports/.gitkeep
 
-# Agno long-term memory store (per-environment, never committed)
+# Agno long-term memory (SQLite / JSON store; never committed)
 .agno_memory.db
 .agno_memory.json
-.agno_memory.json/.env
-.agno_memory.db
+.agno_memory.json/
