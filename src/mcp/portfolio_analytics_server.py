@@ -14,6 +14,7 @@ import yfinance as yf
 from agno.tools import Toolkit
 
 from src.logging_config import get_logger
+from src.ticker_sanitize import normalize_yfinance_ticker
 from src.yfinance_throttle import yfinance_pause
 
 logger = get_logger("mcp.portfolio_analytics")
@@ -45,23 +46,29 @@ def _normalise_weights(weights: list[float]) -> list[float]:
 
 
 def _ticker_info(ticker: str) -> dict:
+    sym = normalize_yfinance_ticker(ticker)
+    if sym is None:
+        return {}
     try:
         yfinance_pause()
-        return yf.Ticker(ticker).info or {}
+        return yf.Ticker(sym).info or {}
     except Exception as e:
-        logger.warning("portfolio_analytics_mcp info fetch failed for %s: %s", ticker, e)
+        logger.warning("portfolio_analytics_mcp info fetch failed for %s: %s", sym, e)
         return {}
 
 
 def _ticker_close_history(ticker: str, period: str = "1y") -> np.ndarray:
+    sym = normalize_yfinance_ticker(ticker)
+    if sym is None:
+        return np.array([])
     try:
         yfinance_pause()
-        hist = yf.Ticker(ticker).history(period=period, interval="1d")
+        hist = yf.Ticker(sym).history(period=period, interval="1d")
         if hist is None or hist.empty:
             return np.array([])
         return hist["Close"].dropna().to_numpy(dtype=float)
     except Exception as e:
-        logger.warning("portfolio_analytics_mcp history fetch failed for %s: %s", ticker, e)
+        logger.warning("portfolio_analytics_mcp history fetch failed for %s: %s", sym, e)
         return np.array([])
 
 

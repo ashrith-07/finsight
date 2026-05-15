@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from src.agents.stub import StubAgent
 from src.llm.base import LLMClient
 from src.logging_config import get_logger
@@ -26,6 +28,23 @@ NEWS_INTENTS = frozenset({"predictive_analysis"})
 REPORT_INTENTS = frozenset({"financial_planning"})
 
 
+def _use_agno_multiagent_team() -> bool:
+    """Groq free-tier TPM (~6000/min) cannot sustain coordinate-mode teams; prefer orchestrator.
+
+    Set ``FINSIGHT_USE_AGNO_TEAM=1`` to force the Agno team when using Groq only.
+    With OpenAI configured, the team is used unless ``FINSIGHT_USE_AGNO_TEAM=0``.
+    """
+    raw = os.environ.get("FINSIGHT_USE_AGNO_TEAM", "").strip().lower()
+    groq_only = bool(os.environ.get("GROQ_API_KEY", "").strip()) and not bool(
+        os.environ.get("OPENAI_API_KEY", "").strip()
+    )
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return not groq_only
+
+
 class AgentRouter:
     """Primary path: ``FinsightAgnoTeam``. Falls back to ``FinsightOrchestrator`` automatically when no LLM key is configured."""
 
@@ -45,17 +64,35 @@ class AgentRouter:
         intent = classifier_result.intent
         entities = classifier_result.entities
 
+        use_team = _use_agno_multiagent_team()
+
+        async def _dispatch_team(cr: ClassifierResult) -> AgentResponse:
+            return await self._team.run(cr, user, query=query)
+
+        async def _dispatch_orchestrator(cr: ClassifierResult) -> AgentResponse:
+            return await self._orchestrator.run(cr, user, query=query)
+
         try:
             if agent in ORCHESTRATED:
-                return await self._team.run(classifier_result, user, query=query)
+                if use_team:
+                    return await _dispatch_team(classifier_result)
+                logger.info(
+                    "router_orchestrator_path",
+                    extra={"agent": agent, "reason": "groq_only_default"},
+                )
+                return await _dispatch_orchestrator(classifier_result)
 
             if agent in NEWS_INTENTS:
                 remapped = classifier_result.model_copy(update={"agent": "financial_news"})
-                return await self._team.run(remapped, user, query=query)
+                if use_team:
+                    return await _dispatch_team(remapped)
+                return await _dispatch_orchestrator(remapped)
 
             if agent in REPORT_INTENTS:
                 remapped = classifier_result.model_copy(update={"agent": "report_generator"})
-                return await self._team.run(remapped, user, query=query)
+                if use_team:
+                    return await _dispatch_team(remapped)
+                return await _dispatch_orchestrator(remapped)
 
             return await self._stub.run(agent, intent, entities)
         except Exception:

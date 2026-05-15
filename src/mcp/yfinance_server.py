@@ -6,12 +6,20 @@ import yfinance as yf
 from agno.tools import Toolkit
 
 from src.logging_config import get_logger
+from src.ticker_sanitize import normalize_yfinance_ticker
 from src.yfinance_throttle import yfinance_pause
 
 logger = get_logger("mcp.yfinance")
 
 # LLM tool payloads must stay small (Groq context + TPM). Full-year dailies are huge.
 _MAX_HISTORICAL_BARS = 56
+
+
+def _invalid_ticker_payload(raw: object) -> dict:
+    return {
+        "ticker": str(raw or "").strip() or "?",
+        "error": "invalid ticker — pass exchange symbols only (e.g. AAPL, MSFT), not names or labels",
+    }
 
 
 def _safe_float(value) -> float | None:
@@ -158,26 +166,29 @@ class YFinanceMCPServer(Toolkit):
 
     def get_price_snapshot(self, ticker: str) -> dict:
         """Live price + key trading metrics for one ticker."""
+        sym = normalize_yfinance_ticker(ticker)
+        if sym is None:
+            return _invalid_ticker_payload(ticker)
         try:
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(sym)
             yfinance_pause()
-            snap = _snapshot_from_fast_info(t, ticker)
+            snap = _snapshot_from_fast_info(t, sym)
             if snap is not None and snap.get("current_price") is not None:
                 return snap
 
             yfinance_pause()
             info = t.info or {}
             if info and len(info) >= 5:
-                return _build_snapshot_dict(ticker, info)
+                return _build_snapshot_dict(sym, info)
 
             yfinance_pause()
-            snap = _snapshot_from_history(t, ticker)
+            snap = _snapshot_from_history(t, sym)
             if snap is not None:
                 return snap
-            return {"ticker": ticker, "error": "no data available"}
+            return {"ticker": sym, "error": "no data available"}
         except Exception as e:
-            logger.warning("yfinance_mcp.get_price_snapshot(%s) failed: %s", ticker, e)
-            return {"ticker": ticker, "error": str(e)}
+            logger.warning("yfinance_mcp.get_price_snapshot(%s) failed: %s", sym, e)
+            return {"ticker": sym, "error": str(e)}
 
     def get_historical_prices(
         self,
@@ -186,11 +197,14 @@ class YFinanceMCPServer(Toolkit):
         interval: str = "1d",
     ) -> dict:
         """OHLCV bars; ``period`` ∈ {1d,5d,1mo,3mo,6mo,1y,2y,5y}."""
+        sym = normalize_yfinance_ticker(ticker)
+        if sym is None:
+            return {"ticker": str(ticker or ""), "period": period, "bars": [], "error": _invalid_ticker_payload(ticker)["error"]}
         yfinance_pause()
         try:
-            hist = yf.Ticker(ticker).history(period=period, interval=interval)
+            hist = yf.Ticker(sym).history(period=period, interval=interval)
             if hist is None or hist.empty:
-                return {"ticker": ticker, "period": period, "bars": [], "error": "no history"}
+                return {"ticker": sym, "period": period, "bars": [], "error": "no history"}
 
             bars = []
             for idx, row in hist.iterrows():
@@ -209,27 +223,30 @@ class YFinanceMCPServer(Toolkit):
             if len(bars) > _MAX_HISTORICAL_BARS:
                 bars = bars[-_MAX_HISTORICAL_BARS:]
             return {
-                "ticker": ticker.upper(),
+                "ticker": sym,
                 "period": period,
                 "interval": interval,
                 "bars": bars,
                 "bars_omitted_older": omitted,
             }
         except Exception as e:
-            logger.warning("yfinance_mcp.get_historical_prices(%s) failed: %s", ticker, e)
-            return {"ticker": ticker, "period": period, "bars": [], "error": str(e)}
+            logger.warning("yfinance_mcp.get_historical_prices(%s) failed: %s", sym, e)
+            return {"ticker": sym, "period": period, "bars": [], "error": str(e)}
 
     def get_company_fundamentals(self, ticker: str) -> dict:
         """Company-level fundamentals + descriptive metadata."""
+        sym = normalize_yfinance_ticker(ticker)
+        if sym is None:
+            return _invalid_ticker_payload(ticker)
         yfinance_pause()
         try:
-            info = yf.Ticker(ticker).info or {}
+            info = yf.Ticker(sym).info or {}
             if not info or len(info) < 5:
-                return {"ticker": ticker, "error": "no data available"}
+                return {"ticker": sym, "error": "no data available"}
 
             return {
-                "ticker": ticker.upper(),
-                "name": str(info.get("longName") or info.get("shortName") or ticker),
+                "ticker": sym,
+                "name": str(info.get("longName") or info.get("shortName") or sym),
                 "sector": info.get("sector"),
                 "industry": info.get("industry"),
                 "country": info.get("country"),
@@ -244,14 +261,17 @@ class YFinanceMCPServer(Toolkit):
                 "description": _truncate(info.get("longBusinessSummary"), 500),
             }
         except Exception as e:
-            logger.warning("yfinance_mcp.get_company_fundamentals(%s) failed: %s", ticker, e)
-            return {"ticker": ticker, "error": str(e)}
+            logger.warning("yfinance_mcp.get_company_fundamentals(%s) failed: %s", sym, e)
+            return {"ticker": sym, "error": str(e)}
 
     def get_financial_statements(self, ticker: str) -> dict:
         """Most-recent 4 quarters of revenue, net income, total assets, total debt."""
+        sym = normalize_yfinance_ticker(ticker)
+        if sym is None:
+            return _invalid_ticker_payload(ticker)
         yfinance_pause()
         try:
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(sym)
             financials = t.financials
             balance = t.balance_sheet
 
@@ -266,7 +286,7 @@ class YFinanceMCPServer(Toolkit):
                 return {str(period): _safe_float(value) for period, value in series.items()}
 
             return {
-                "ticker": ticker.upper(),
+                "ticker": sym,
                 "revenue": _row_last_n(financials, ["Total Revenue", "TotalRevenue"]),
                 "net_income": _row_last_n(financials, ["Net Income", "NetIncome"]),
                 "total_assets": _row_last_n(balance, ["Total Assets", "TotalAssets"]),
@@ -275,17 +295,20 @@ class YFinanceMCPServer(Toolkit):
                 ),
             }
         except Exception as e:
-            logger.warning("yfinance_mcp.get_financial_statements(%s) failed: %s", ticker, e)
-            return {"ticker": ticker, "error": str(e)}
+            logger.warning("yfinance_mcp.get_financial_statements(%s) failed: %s", sym, e)
+            return {"ticker": sym, "error": str(e)}
 
     def get_options_data(self, ticker: str) -> dict:
         """Nearest-expiry options chain summary; safe defaults when unsupported."""
+        sym = normalize_yfinance_ticker(ticker)
+        if sym is None:
+            return _invalid_ticker_payload(ticker)
         yfinance_pause()
         try:
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(sym)
             expiries = list(t.options or ())
             if not expiries:
-                return {"ticker": ticker.upper(), "error": "no options listed"}
+                return {"ticker": sym, "error": "no options listed"}
 
             nearest = expiries[0]
             chain = t.option_chain(nearest)
@@ -306,7 +329,7 @@ class YFinanceMCPServer(Toolkit):
                 iv_avg = round(sum(iv_values) / len(iv_values), 4)
 
             return {
-                "ticker": ticker.upper(),
+                "ticker": sym,
                 "nearest_expiry": nearest,
                 "put_call_ratio": put_call_ratio,
                 "implied_volatility_avg": iv_avg,
@@ -314,18 +337,18 @@ class YFinanceMCPServer(Toolkit):
                 "expiries_available": len(expiries),
             }
         except Exception as e:
-            logger.warning("yfinance_mcp.get_options_data(%s) failed: %s", ticker, e)
-            return {"ticker": ticker, "error": str(e)}
+            logger.warning("yfinance_mcp.get_options_data(%s) failed: %s", sym, e)
+            return {"ticker": sym, "error": str(e)}
 
     def screen_stocks(self, tickers: list[str]) -> list[dict]:
         """Sequential comparison metrics — parallel Yahoo calls trigger 429 / crumb errors."""
         clean: list[str] = []
         seen: set[str] = set()
         for t in tickers or []:
-            s = str(t or "").strip().upper()
-            if s and s not in seen:
-                seen.add(s)
-                clean.append(s)
+            sym = normalize_yfinance_ticker(t)
+            if sym and sym not in seen:
+                seen.add(sym)
+                clean.append(sym)
         if not clean:
             return []
         clean = clean[:24]

@@ -872,6 +872,12 @@ class FinsightAgnoTeam:
 
     async def _agno_arun_with_retries(self, runner: Any, prompt: str) -> Any:
         """Groq free tier often returns 429 mid-team-run; brief backoff preserves the Agno path."""
+        if os.environ.get("GROQ_API_KEY", "").strip() and not os.environ.get(
+            "OPENAI_API_KEY", ""
+        ).strip():
+            pre = float(os.environ.get("GROQ_TEAM_PREFLIGHT_SLEEP_S", "2"))
+            if pre > 0:
+                await asyncio.sleep(pre)
         max_attempts = max(1, min(5, int(os.environ.get("AGNO_TEAM_RETRY_ATTEMPTS", "2"))))
         base = float(os.environ.get("AGNO_TEAM_RETRY_BASE_S", "18"))
         last: Any = None
