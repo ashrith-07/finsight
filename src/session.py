@@ -183,9 +183,9 @@ class AgnoMemoryManager:
             if not memory_text:
                 return
             record = UserMemory(
-                memory=memory_text[:600],
+                memory=memory_text[:400],
                 user_id=user_id,
-                input=(response or "")[:600] or None,
+                input=(response or "")[:400] or None,
             )
             await asyncio.to_thread(
                 self._memory.add_user_memory, memory=record, user_id=user_id,
@@ -209,8 +209,17 @@ class AgnoMemoryManager:
     def format_for_prompt(memories: list[str]) -> str:
         if not memories:
             return ""
-        facts = "\n".join(f"- {m}" for m in memories[:10])
-        return f"\nKnown facts about this user:\n{facts}\n"
+        lines: list[str] = []
+        for m in memories[:6]:
+            s = str(m or "").strip().replace("\n", " ")
+            if not s:
+                continue
+            if len(s) > 140:
+                s = s[:137] + "…"
+            lines.append(f"- {s}")
+        if not lines:
+            return ""
+        return "\nKnown facts about this user (may be incomplete):\n" + "\n".join(lines) + "\n"
 
 
 session_store = SessionStore()

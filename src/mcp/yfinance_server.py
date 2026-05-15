@@ -11,6 +11,9 @@ from src.logging_config import get_logger
 
 logger = get_logger("mcp.yfinance")
 
+# LLM tool payloads must stay small (Groq context + TPM). Full-year dailies are huge.
+_MAX_HISTORICAL_BARS = 56
+
 
 def _safe_float(value) -> float | None:
     try:
@@ -104,9 +107,10 @@ class YFinanceMCPServer(Toolkit):
 
             bars = []
             for idx, row in hist.iterrows():
+                d = idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
                 bars.append(
                     {
-                        "date": idx.strftime("%Y-%m-%d %H:%M:%S"),
+                        "date": d,
                         "open": _safe_float(row.get("Open")),
                         "high": _safe_float(row.get("High")),
                         "low": _safe_float(row.get("Low")),
@@ -114,11 +118,15 @@ class YFinanceMCPServer(Toolkit):
                         "volume": _safe_int(row.get("Volume")),
                     }
                 )
+            omitted = max(0, len(bars) - _MAX_HISTORICAL_BARS)
+            if len(bars) > _MAX_HISTORICAL_BARS:
+                bars = bars[-_MAX_HISTORICAL_BARS:]
             return {
                 "ticker": ticker.upper(),
                 "period": period,
                 "interval": interval,
                 "bars": bars,
+                "bars_omitted_older": omitted,
             }
         except Exception as e:
             logger.warning("yfinance_mcp.get_historical_prices(%s) failed: %s", ticker, e)
@@ -230,6 +238,7 @@ class YFinanceMCPServer(Toolkit):
                 clean.append(s)
         if not clean:
             return []
+        clean = clean[:24]
 
         def _row(sym: str) -> dict:
             snap = self.get_price_snapshot(sym)

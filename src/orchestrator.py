@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import re
 import time
 from collections.abc import Awaitable
@@ -842,6 +844,48 @@ class FinsightAgnoTeam:
             logger.warning("FinsightAgnoTeam construction failed: %s", e)
             self._available = False
 
+    @staticmethod
+    def _groq_error_blob(response: Any) -> str:
+        parts: list[str] = [str(getattr(response, "content", "") or "")]
+        for attr in ("messages", "errors", "error", "output"):
+            if hasattr(response, attr):
+                parts.append(str(getattr(response, attr) or ""))
+        return " ".join(parts).lower()
+
+    @classmethod
+    def _should_retry_groq_rate_limit(cls, response: Any) -> bool:
+        if not cls._agno_response_failed(response):
+            return False
+        b = cls._groq_error_blob(response)
+        if "context length" in b or "reduce the length" in b or "too long" in b:
+            return False
+        return (
+            "429" in b
+            or "rate limit" in b
+            or "rate_limit" in b
+            or "too many requests" in b
+            or "tokens per minute" in b
+        )
+
+    async def _agno_arun_with_retries(self, runner: Any, prompt: str) -> Any:
+        """Groq free tier often returns 429 mid-team-run; brief backoff preserves the Agno path."""
+        max_attempts = max(1, min(5, int(os.environ.get("AGNO_TEAM_RETRY_ATTEMPTS", "3"))))
+        base = float(os.environ.get("AGNO_TEAM_RETRY_BASE_S", "9"))
+        last: Any = None
+        for i in range(max_attempts):
+            last = await runner.arun(prompt, stream=False)
+            if not self._agno_response_failed(last):
+                return last
+            if i >= max_attempts - 1 or not self._should_retry_groq_rate_limit(last):
+                return last
+            wait_s = base * (1.35**i)
+            logger.warning(
+                "agno_groq_transient_retry",
+                extra={"attempt": i + 1, "wait_s": round(wait_s, 2)},
+            )
+            await asyncio.sleep(wait_s)
+        return last
+
     async def run(
         self,
         classifier_result: ClassifierResult,
@@ -966,7 +1010,7 @@ class FinsightAgnoTeam:
         assert self._portfolio_team is not None
         prompt = self._build_portfolio_prompt(user, intent)
         start = time.perf_counter()
-        response = await self._portfolio_team.arun(prompt, stream=False)
+        response = await self._agno_arun_with_retries(self._portfolio_team, prompt)
         wall_ms = int((time.perf_counter() - start) * 1000)
         if self._agno_response_failed(response):
             return None
@@ -1004,7 +1048,7 @@ class FinsightAgnoTeam:
             f"User: {user.get('name') or 'investor'} (risk {user.get('risk_profile') or 'unknown'})."
         )
         start = time.perf_counter()
-        response = await self._research_team.arun(prompt, stream=False)
+        response = await self._agno_arun_with_retries(self._research_team, prompt)
         wall_ms = int((time.perf_counter() - start) * 1000)
         if self._agno_response_failed(response):
             return None
@@ -1041,7 +1085,7 @@ class FinsightAgnoTeam:
             f"{', '.join(tickers) if tickers else 'broad market'}."
         )
         start = time.perf_counter()
-        response = await self._news_agent.arun(prompt, stream=False)
+        response = await self._agno_arun_with_retries(self._news_agent, prompt)
         wall_ms = int((time.perf_counter() - start) * 1000)
         if self._agno_response_failed(response):
             return None
@@ -1069,13 +1113,16 @@ class FinsightAgnoTeam:
     ) -> AgentResponse | None:
         assert self._report_agent is not None
         tickers = list(entities.tickers or [])
+        pos_blob = json.dumps(user.get("positions") or [], default=str)
+        if len(pos_blob) > 4500:
+            pos_blob = pos_blob[:4497] + "..."
         prompt = (
             f"Generate a financial report. Intent: {intent}. Tickers: "
             f"{', '.join(tickers) if tickers else 'portfolio'}. "
-            f"User positions: {user.get('positions') or []}."
+            f"User positions JSON (truncated if long): {pos_blob}."
         )
         start = time.perf_counter()
-        response = await self._report_agent.arun(prompt, stream=False)
+        response = await self._agno_arun_with_retries(self._report_agent, prompt)
         wall_ms = int((time.perf_counter() - start) * 1000)
         if self._agno_response_failed(response):
             return None
@@ -1112,6 +1159,8 @@ class FinsightAgnoTeam:
             pos_text = "No positions (new investor)"
         bench = (user.get("preferences") or {}).get("preferred_benchmark") or "S&P 500"
         memory_text = agno_memory.format_for_prompt(user.get("_memories") or [])
+        if len(memory_text) > 1400:
+            memory_text = memory_text[:1397] + "…\n"
         return (
             f"{memory_text}"
             f"User: {user.get('name') or 'Unknown'} | Age: {user.get('age')} | "

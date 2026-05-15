@@ -15,20 +15,26 @@ logger = get_logger("mcp.web_search")
 
 
 def _normalise_news(item: dict) -> dict:
+    raw = item.get("body") or item.get("excerpt") or ""
+    raw_s = str(raw)
+    sn = raw_s[:400] + ("…" if len(raw_s) > 400 else "")
     return {
-        "title": item.get("title") or "",
+        "title": (str(item.get("title") or ""))[:200],
         "url": item.get("url") or item.get("href") or "",
-        "snippet": item.get("body") or item.get("excerpt") or "",
+        "snippet": sn,
         "published_date": item.get("date") or item.get("published") or "",
-        "source": item.get("source") or "",
+        "source": (str(item.get("source") or ""))[:80],
     }
 
 
 def _normalise_text(item: dict) -> dict:
+    raw = item.get("body") or ""
+    raw_s = str(raw)
+    sn = raw_s[:400] + ("…" if len(raw_s) > 400 else "")
     return {
-        "title": item.get("title") or "",
+        "title": (str(item.get("title") or ""))[:200],
         "url": item.get("href") or item.get("url") or "",
-        "snippet": item.get("body") or "",
+        "snippet": sn,
     }
 
 

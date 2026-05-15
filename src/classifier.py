@@ -90,13 +90,16 @@ def _taxonomy_block() -> str:
 
 def _build_system_message(inp: ClassifierInput) -> str:
     context_blob = ""
-    if inp.last_entities:
-        context_blob = (
-            "\nCONVERSATION CONTEXT:\n"
-            f"The user's last known entities were: {json.dumps(inp.last_entities, ensure_ascii=False)}\n"
-            "If the current query uses vague references or pronouns, resolve them "
-            "using these entities first before extracting new ones.\n"
-        )
+        if inp.last_entities:
+            les = json.dumps(inp.last_entities, ensure_ascii=False)
+            if len(les) > 900:
+                les = les[:897] + "..."
+            context_blob = (
+                "\nCONVERSATION CONTEXT:\n"
+                f"The user's last known entities were: {les}\n"
+                "If the current query uses vague references or pronouns, resolve them "
+                "using these entities first before extracting new ones.\n"
+            )
 
     return f"""You are an expert financial intent classifier for a wealth-management assistant.
 
@@ -493,8 +496,13 @@ class IntentClassifier:
         messages: list[dict[str, str]] = [
             {"role": "system", "content": _build_system_message(inp)},
         ]
-        for turn in inp.prior_user_turns:
-            messages.append({"role": "user", "content": turn})
+        for turn in (inp.prior_user_turns or [])[-5:]:
+            t = str(turn or "").strip()
+            if not t:
+                continue
+            if len(t) > 500:
+                t = t[:497] + "…"
+            messages.append({"role": "user", "content": t})
             messages.append({"role": "assistant", "content": "[acknowledged]"})
         messages.append({"role": "user", "content": inp.query})
         return messages
