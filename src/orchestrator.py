@@ -742,6 +742,8 @@ class FinsightAgnoTeam:
                     "Always fetch live prices for all positions.",
                     "Compute concentration, performance, and benchmark comparison.",
                     "Provide plain-language observations.",
+                    "For price quotes use get_price_snapshot per ticker; avoid screen_stocks unless comparing many tickers "
+                    "(screen_stocks is serialized and slow).",
                 ],
                 structured_outputs=False,
             )
@@ -768,6 +770,7 @@ class FinsightAgnoTeam:
                     "Search for recent relevant news.",
                     "Compare multiple tickers when provided.",
                     "Highlight the most important metric for investors.",
+                    "For 2–4 tickers call get_price_snapshot once each instead of screen_stocks.",
                 ],
                 structured_outputs=False,
             )
@@ -869,8 +872,8 @@ class FinsightAgnoTeam:
 
     async def _agno_arun_with_retries(self, runner: Any, prompt: str) -> Any:
         """Groq free tier often returns 429 mid-team-run; brief backoff preserves the Agno path."""
-        max_attempts = max(1, min(5, int(os.environ.get("AGNO_TEAM_RETRY_ATTEMPTS", "3"))))
-        base = float(os.environ.get("AGNO_TEAM_RETRY_BASE_S", "9"))
+        max_attempts = max(1, min(5, int(os.environ.get("AGNO_TEAM_RETRY_ATTEMPTS", "2"))))
+        base = float(os.environ.get("AGNO_TEAM_RETRY_BASE_S", "18"))
         last: Any = None
         for i in range(max_attempts):
             last = await runner.arun(prompt, stream=False)

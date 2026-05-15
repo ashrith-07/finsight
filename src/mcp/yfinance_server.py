@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-
 import yfinance as yf
 from agno.tools import Toolkit
 
 from src.logging_config import get_logger
+from src.yfinance_throttle import yfinance_pause
 
 logger = get_logger("mcp.yfinance")
 
@@ -39,6 +38,109 @@ def _truncate(text: str, n: int) -> str:
     return s[:n]
 
 
+def _snapshot_from_fast_info(t: yf.Ticker, ticker: str) -> dict | None:
+    """Lighter quote path — fewer full ``info`` / crumb issues on congested IPs."""
+    try:
+        fi = t.fast_info
+        if fi is None:
+            return None
+
+        def pick(*keys: str):
+            for k in keys:
+                try:
+                    v = fi[k]  # type: ignore[index]
+                except Exception:
+                    continue
+                if v is not None:
+                    return v
+            return None
+
+        current = _safe_float(pick("last_price", "regular_market_price"))
+        if current is None:
+            return None
+        prev_close = _safe_float(pick("previous_close", "regular_market_previous_close"))
+        day_change_pct = None
+        if prev_close not in (None, 0):
+            day_change_pct = round((current - prev_close) / prev_close * 100, 4)
+        return {
+            "ticker": str(ticker).upper(),
+            "currency": str(pick("currency", "currency_symbol") or "USD").upper(),
+            "current_price": current,
+            "previous_close": prev_close,
+            "day_change_pct": day_change_pct,
+            "volume": _safe_int(pick("last_volume", "regular_market_volume")),
+            "market_cap": _safe_float(pick("market_cap")),
+            "fifty_two_week_high": _safe_float(pick("year_high", "fifty_two_week_high")),
+            "fifty_two_week_low": _safe_float(pick("year_low", "fifty_two_week_low")),
+            "pe_ratio": _safe_float(pick("pe_ratio", "trailing_pe")),
+            "beta": _safe_float(pick("beta")),
+            "dividend_yield": _safe_float(pick("dividend_yield")),
+        }
+    except Exception:
+        return None
+
+
+def _snapshot_from_history(t: yf.Ticker, ticker: str) -> dict | None:
+    try:
+        hist = t.history(period="5d", interval="1d")
+        if hist is None or hist.empty:
+            return None
+        row = hist.iloc[-1]
+        prv = hist.iloc[-2] if len(hist) > 1 else row
+        cur = _safe_float(row.get("Close"))
+        prev_close = _safe_float(prv.get("Close"))
+        if cur is None:
+            return None
+        day_change_pct = None
+        if prev_close not in (None, 0):
+            day_change_pct = round((cur - prev_close) / prev_close * 100, 4)
+        return {
+            "ticker": str(ticker).upper(),
+            "currency": "USD",
+            "current_price": cur,
+            "previous_close": prev_close,
+            "day_change_pct": day_change_pct,
+            "volume": _safe_int(row.get("Volume")),
+            "market_cap": None,
+            "fifty_two_week_high": None,
+            "fifty_two_week_low": None,
+            "pe_ratio": None,
+            "beta": None,
+            "dividend_yield": None,
+        }
+    except Exception:
+        return None
+
+
+def _build_snapshot_dict(ticker: str, info: dict) -> dict:
+    current = _safe_float(
+        info.get("currentPrice") or info.get("regularMarketPrice")
+    )
+    prev_close = _safe_float(
+        info.get("previousClose") or info.get("regularMarketPreviousClose")
+    )
+    day_change_pct: float | None = None
+    if current is not None and prev_close not in (None, 0):
+        day_change_pct = round((current - prev_close) / prev_close * 100, 4)
+    return {
+        "ticker": ticker.upper(),
+        "currency": str(info.get("currency") or "USD").upper(),
+        "current_price": current,
+        "previous_close": prev_close,
+        "day_change_pct": day_change_pct,
+        "volume": _safe_int(
+            info.get("volume") if info.get("volume") is not None
+            else info.get("regularMarketVolume")
+        ),
+        "market_cap": _safe_float(info.get("marketCap")),
+        "fifty_two_week_high": _safe_float(info.get("fiftyTwoWeekHigh")),
+        "fifty_two_week_low": _safe_float(info.get("fiftyTwoWeekLow")),
+        "pe_ratio": _safe_float(info.get("trailingPE") or info.get("forwardPE")),
+        "beta": _safe_float(info.get("beta")),
+        "dividend_yield": _safe_float(info.get("dividendYield")),
+    }
+
+
 class YFinanceMCPServer(Toolkit):
     """Wraps yfinance and exposes structured tools an Agno agent can call."""
 
@@ -58,37 +160,21 @@ class YFinanceMCPServer(Toolkit):
         """Live price + key trading metrics for one ticker."""
         try:
             t = yf.Ticker(ticker)
+            yfinance_pause()
+            snap = _snapshot_from_fast_info(t, ticker)
+            if snap is not None and snap.get("current_price") is not None:
+                return snap
+
+            yfinance_pause()
             info = t.info or {}
-            if not info or len(info) < 5:
-                return {"ticker": ticker, "error": "no data available"}
+            if info and len(info) >= 5:
+                return _build_snapshot_dict(ticker, info)
 
-            current = _safe_float(
-                info.get("currentPrice") or info.get("regularMarketPrice")
-            )
-            prev_close = _safe_float(
-                info.get("previousClose") or info.get("regularMarketPreviousClose")
-            )
-            day_change_pct: float | None = None
-            if current is not None and prev_close not in (None, 0):
-                day_change_pct = round((current - prev_close) / prev_close * 100, 4)
-
-            return {
-                "ticker": ticker.upper(),
-                "currency": str(info.get("currency") or "USD").upper(),
-                "current_price": current,
-                "previous_close": prev_close,
-                "day_change_pct": day_change_pct,
-                "volume": _safe_int(
-                    info.get("volume") if info.get("volume") is not None
-                    else info.get("regularMarketVolume")
-                ),
-                "market_cap": _safe_float(info.get("marketCap")),
-                "fifty_two_week_high": _safe_float(info.get("fiftyTwoWeekHigh")),
-                "fifty_two_week_low": _safe_float(info.get("fiftyTwoWeekLow")),
-                "pe_ratio": _safe_float(info.get("trailingPE") or info.get("forwardPE")),
-                "beta": _safe_float(info.get("beta")),
-                "dividend_yield": _safe_float(info.get("dividendYield")),
-            }
+            yfinance_pause()
+            snap = _snapshot_from_history(t, ticker)
+            if snap is not None:
+                return snap
+            return {"ticker": ticker, "error": "no data available"}
         except Exception as e:
             logger.warning("yfinance_mcp.get_price_snapshot(%s) failed: %s", ticker, e)
             return {"ticker": ticker, "error": str(e)}
@@ -100,6 +186,7 @@ class YFinanceMCPServer(Toolkit):
         interval: str = "1d",
     ) -> dict:
         """OHLCV bars; ``period`` ∈ {1d,5d,1mo,3mo,6mo,1y,2y,5y}."""
+        yfinance_pause()
         try:
             hist = yf.Ticker(ticker).history(period=period, interval=interval)
             if hist is None or hist.empty:
@@ -134,6 +221,7 @@ class YFinanceMCPServer(Toolkit):
 
     def get_company_fundamentals(self, ticker: str) -> dict:
         """Company-level fundamentals + descriptive metadata."""
+        yfinance_pause()
         try:
             info = yf.Ticker(ticker).info or {}
             if not info or len(info) < 5:
@@ -161,6 +249,7 @@ class YFinanceMCPServer(Toolkit):
 
     def get_financial_statements(self, ticker: str) -> dict:
         """Most-recent 4 quarters of revenue, net income, total assets, total debt."""
+        yfinance_pause()
         try:
             t = yf.Ticker(ticker)
             financials = t.financials
@@ -191,6 +280,7 @@ class YFinanceMCPServer(Toolkit):
 
     def get_options_data(self, ticker: str) -> dict:
         """Nearest-expiry options chain summary; safe defaults when unsupported."""
+        yfinance_pause()
         try:
             t = yf.Ticker(ticker)
             expiries = list(t.options or ())
@@ -228,7 +318,7 @@ class YFinanceMCPServer(Toolkit):
             return {"ticker": ticker, "error": str(e)}
 
     def screen_stocks(self, tickers: list[str]) -> list[dict]:
-        """Concurrent comparison metrics for a list of tickers, sorted by market cap desc."""
+        """Sequential comparison metrics — parallel Yahoo calls trigger 429 / crumb errors."""
         clean: list[str] = []
         seen: set[str] = set()
         for t in tickers or []:
@@ -253,8 +343,7 @@ class YFinanceMCPServer(Toolkit):
                 "error": snap.get("error"),
             }
 
-        with ThreadPoolExecutor(max_workers=min(8, len(clean))) as pool:
-            rows = list(pool.map(_row, clean))
+        rows = [_row(sym) for sym in clean]
 
         rows.sort(key=lambda r: (r.get("market_cap") or 0.0), reverse=True)
         return rows
