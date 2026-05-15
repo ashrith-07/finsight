@@ -90,16 +90,16 @@ def _taxonomy_block() -> str:
 
 def _build_system_message(inp: ClassifierInput) -> str:
     context_blob = ""
-        if inp.last_entities:
-            les = json.dumps(inp.last_entities, ensure_ascii=False)
-            if len(les) > 900:
-                les = les[:897] + "..."
-            context_blob = (
-                "\nCONVERSATION CONTEXT:\n"
-                f"The user's last known entities were: {les}\n"
-                "If the current query uses vague references or pronouns, resolve them "
-                "using these entities first before extracting new ones.\n"
-            )
+    if inp.last_entities:
+        les = json.dumps(inp.last_entities, ensure_ascii=False)
+        if len(les) > 900:
+            les = les[:897] + "..."
+        context_blob = (
+            "\nCONVERSATION CONTEXT:\n"
+            f"The user's last known entities were: {les}\n"
+            "If the current query uses vague references or pronouns, resolve them "
+            "using these entities first before extracting new ones.\n"
+        )
 
     return f"""You are an expert financial intent classifier for a wealth-management assistant.
 
